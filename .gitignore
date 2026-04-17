@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables — NEVER commit these
+.env
+.env.local
+.env.production
+
+# Logs
+*.log
+
+# OS
+.DS_Store
