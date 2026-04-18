@@ -2,7 +2,6 @@ import { useNavigate } from 'react-router-dom';
 import { Search, Download, MoreHorizontal, Pencil, Trash2, FileSpreadsheet, Clock } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useDocumentStore } from '../../store/useDocumentStore';
-import { useAuthStore } from '../../store/useAuthStore';
 import { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import ExcelJS from 'exceljs';
@@ -11,11 +10,7 @@ import type { DateFilterState } from '../../hooks/useDateFilter';
 import { DateRangeFilter } from '../../components/ui/DateRangeFilter';
 import type { DocumentRecord } from '../../types/document';
 
-// Sheet names match the actual template (FEB abbreviated, trailing space on JUNE removed internally)
-const MONTH_NAMES = [
-  'JANUARY','FEB','MARCH','APRIL','MAY','JUNE',
-  'JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER',
-];
+import { getExportPeriodString, groupDocsByMonthYear } from '../../lib/exportUtils';
 
 // Accounting number format matching the template
 const ACCOUNTING_FMT = '_(* #,##0.00_);_(* \\(#,##0.00\\);_(* "-"??_);_(@_)';
@@ -31,21 +26,11 @@ async function downloadBlob(blob: Blob, filename: string) {
 async function exportToExcel(docs: DocumentRecord[], filter: DateFilterState) {
   if (docs.length === 0) { alert('No documents to export.'); return; }
   const wb = new ExcelJS.Workbook();
-  const year =
-    filter.mode === 'yearly' || filter.mode === 'quarterly'
-      ? filter.year
-      : filter.mode === 'custom' && filter.startDate
-      ? new Date(filter.startDate + 'T00:00:00').getFullYear()
-      : docs.map(d => new Date(d.date).getFullYear()).filter(Boolean).reduce((a, b) => Math.max(a, b), new Date().getFullYear() - 1);
-  const byMonth: Record<number, typeof docs> = {};
-  docs.forEach(d => {
-    const m = new Date(d.date).getMonth();
-    if (!byMonth[m]) byMonth[m] = [];
-    byMonth[m].push(d);
-  });
-  MONTH_NAMES.forEach((_, mi) => {
-    const rows = byMonth[mi] ?? [];
-    const ws = wb.addWorksheet(`${MONTH_NAMES[mi]} ${year}`);
+  const period = getExportPeriodString(docs, filter);
+  const grouped = groupDocsByMonthYear(docs);
+
+  grouped.forEach(({ year, monthName, docs: rows }) => {
+    const ws = wb.addWorksheet(`${monthName} ${year}`);
 
     // Column widths matching the template exactly
     ws.columns = [
@@ -144,7 +129,7 @@ async function exportToExcel(docs: DocumentRecord[], filter: DateFilterState) {
         doc.taxId,                         // E — TIN
         doc.category,                      // F — PARTICULARS
         doc.vendor,                        // G — REGISTERED NAME
-        null,                              // H — REGISTERED ADDRESS
+        doc.registeredAddress || '',       // H — REGISTERED ADDRESS
         null,                              // I — VOUCHER NO. (blank)
         null,                              // J — CHECK NO. (blank)
         'SALES INVOICE',                   // K — REFERENCE RECEIPT
@@ -166,7 +151,7 @@ async function exportToExcel(docs: DocumentRecord[], filter: DateFilterState) {
   });
   const buffer = await wb.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  await downloadBlob(blob, `AA2000_Purchases_Journal_${year}.xlsx`);
+  await downloadBlob(blob, `AA2000_Purchases_Journal_${period}.xlsx`);
 }
 
 // ── Three-dot dropdown ────────────────────────────────────────────────────────
@@ -207,14 +192,25 @@ function RowMenu({ docId, onDelete }: { docId: string; onDelete: () => void }) {
         <MoreHorizontal className="h-5 w-5" />
       </button>
       {open && createPortal(
-        <div ref={menuRef} style={{ position: 'fixed', top: menuPos.top, left: menuPos.left, zIndex: 9999 }}
-          className="w-36 bg-[--bg-surface] border border-[--border-subtle] rounded-lg shadow-lg overflow-hidden">
+        <div ref={menuRef} style={{
+          position: 'fixed',
+          top: menuPos.top,
+          left: menuPos.left,
+          zIndex: 9999,
+          backgroundColor: 'var(--bg-surface)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: '0.5rem',
+          boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
+          overflow: 'hidden',
+          width: '9rem',
+        }}>
           <button onClick={() => { setOpen(false); navigate(`/documents/${docId}`); }}
-            className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-[--text-secondary] hover:bg-[--bg-raised] transition-colors">
-            <Pencil className="h-4 w-4 text-[--text-muted]" /> Edit
+            style={{ color: 'var(--text-secondary)' }}
+            className="w-full flex items-center gap-2 px-4 py-2.5 text-sm transition-colors hover:bg-raised">
+            <Pencil className="h-4 w-4" style={{ color: 'var(--text-muted)' }} /> Edit
           </button>
           <button onClick={() => { setOpen(false); onDelete(); }}
-            className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors">
+            className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-red-500 dark:text-red-400 transition-colors hover:bg-red-50 dark:hover:bg-red-950/20">
             <Trash2 className="h-4 w-4" /> Delete
           </button>
         </div>,
@@ -227,9 +223,8 @@ function RowMenu({ docId, onDelete }: { docId: string; onDelete: () => void }) {
 // ── Main component ────────────────────────────────────────────────────────────
 export function DocumentLibrary() {
   const navigate = useNavigate();
-  const { documents, deleteDocument, updateDocument } = useDocumentStore();
-  const userRole = useAuthStore((s) => s.user?.role);
-  const isAccountant = userRole === 'Accountant';
+  const { documents, deleteDocument } = useDocumentStore();
+
   const [searchTerm, setSearchTerm] = useState('');
   const [isExporting, setIsExporting] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -255,17 +250,44 @@ export function DocumentLibrary() {
 
   return (
     <div className="space-y-4 md:space-y-6">
-      {deleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="bg-[--bg-surface] rounded-xl shadow-xl p-6 w-full max-w-sm">
-            <h3 className="font-bold text-[--text-primary] text-lg mb-2">Delete document?</h3>
-            <p className="text-sm text-[--text-muted] mb-5">This action cannot be undone.</p>
-            <div className="flex gap-3 justify-end">
-              <button onClick={() => setDeleteConfirm(null)} className="px-4 py-2 text-sm font-medium text-[--text-secondary] border border-[--border-default] rounded-lg hover:bg-[--bg-raised]">Cancel</button>
-              <button onClick={() => handleDelete(deleteConfirm!)} className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700">Delete</button>
+      {deleteConfirm && createPortal(
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          top: 0, left: 0, right: 0, bottom: 0,
+          width: '100%',
+          height: '100%',
+          zIndex: 9999,
+          backgroundColor: 'rgba(0,0,0,0.55)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '0 1rem',
+        }}>
+          <div style={{
+            backgroundColor: 'var(--bg-surface)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: '0.75rem',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+            padding: '1.5rem',
+            width: '100%',
+            maxWidth: '24rem',
+          }}>
+            <h3 style={{ color: 'var(--text-primary)', fontWeight: 700, fontSize: '1.125rem', marginBottom: '0.5rem' }}>Delete document?</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.25rem' }}>This action cannot be undone.</p>
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-default)', backgroundColor: 'transparent', borderRadius: '0.5rem', padding: '0.5rem 1rem', fontSize: '0.875rem', fontWeight: 500, cursor: 'pointer' }}
+              >Cancel</button>
+              <button
+                onClick={() => handleDelete(deleteConfirm!)}
+                style={{ backgroundColor: '#dc2626', color: '#fff', border: 'none', borderRadius: '0.5rem', padding: '0.5rem 1rem', fontSize: '0.875rem', fontWeight: 500, cursor: 'pointer' }}
+              >Delete</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       <div className="flex flex-col gap-2 sm:flex-row sm:justify-between sm:items-center sm:flex-wrap">
@@ -316,21 +338,21 @@ export function DocumentLibrary() {
         <div className="overflow-x-hidden w-full">
           <table className="w-full text-sm text-left table-fixed">
             <colgroup>
-              <col className="w-[35%]" />
-              <col className="w-[25%]" />
-              <col className="w-[18%]" />
+              <col className="w-[33%]" />
+              <col className="w-[22%]" />
+              <col className="w-[17%]" />
+              <col className="hidden sm:table-column w-[13%]" />
               <col className="hidden sm:table-column w-[10%]" />
-              <col className="hidden sm:table-column w-[10%]" />
-              <col className="w-[10%] sm:w-[2%]" />
+              <col style={{ width: '40px' }} />
             </colgroup>
             <thead className="bg-[--bg-raised] text-[--text-secondary] font-medium border-b border-[--border-subtle]">
               <tr>
-                <th className="px-2 md:px-6 py-3 md:py-4 font-semibold uppercase text-[11px] tracking-wider">Document</th>
-                <th className="px-2 md:px-6 py-3 md:py-4 font-semibold uppercase text-[11px] tracking-wider">Vendor</th>
-                <th className="px-2 md:px-6 py-3 md:py-4 font-semibold uppercase text-[11px] tracking-wider">Amount</th>
-                <th className="px-2 md:px-6 py-3 md:py-4 font-semibold uppercase text-[11px] tracking-wider hidden sm:table-cell">Score</th>
-                <th className="px-2 md:px-6 py-3 md:py-4 font-semibold uppercase text-[11px] tracking-wider hidden sm:table-cell">Status</th>
-                <th className="px-1 md:px-4 py-3 md:py-4 w-8"></th>
+                <th className="px-3 md:px-4 py-3 font-semibold uppercase text-[11px] tracking-wider">Document</th>
+                <th className="px-3 md:px-4 py-3 font-semibold uppercase text-[11px] tracking-wider">Vendor</th>
+                <th className="px-3 md:px-4 py-3 font-semibold uppercase text-[11px] tracking-wider">Amount</th>
+                <th className="px-3 md:px-4 py-3 font-semibold uppercase text-[11px] tracking-wider hidden sm:table-cell text-center">Score</th>
+                <th className="px-3 md:px-4 py-3 font-semibold uppercase text-[11px] tracking-wider hidden sm:table-cell text-center">Status</th>
+                <th className="px-2 py-3 w-10"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[--border-subtle]">
@@ -344,24 +366,24 @@ export function DocumentLibrary() {
                 <tr key={doc.id} onClick={() => navigate(`/documents/${doc.id}`)}
                   className={cn('hover:bg-[--bg-raised] transition-colors cursor-pointer group',
                     doc.status === 'Pending Review' && 'bg-amber-50/40 dark:bg-amber-950/10 hover:bg-amber-50 dark:hover:bg-amber-950/20')}>
-                  <td className="px-2 md:px-6 py-3 md:py-4">
+                  <td className="px-3 md:px-4 py-3">
                     <div className="font-medium text-[--text-primary] truncate">{doc.name}</div>
                     <div className="text-[--text-muted] flex items-center gap-1 mt-0.5 flex-wrap">
                       <span className="bg-[--bg-raised] px-1 py-0.5 rounded text-[10px] uppercase font-bold text-[--text-secondary]">{doc.type}</span>
                       <span className="text-[10px]">{doc.date}</span>
                     </div>
                   </td>
-                  <td className="px-2 md:px-6 py-3 md:py-4">
+                  <td className="px-3 md:px-4 py-3">
                     <div className="font-medium text-[--text-primary] truncate">{doc.vendor}</div>
                     <div className="text-[--text-muted] text-xs hidden sm:block">TIN: {doc.taxId}</div>
                   </td>
-                  <td className="px-2 md:px-6 py-3 md:py-4">
+                  <td className="px-3 md:px-4 py-3">
                     <div className="font-semibold text-[--text-primary] text-xs md:text-sm truncate">₱{doc.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
                     <div className="text-[--text-muted] text-xs hidden sm:block">{doc.category}</div>
                   </td>
-                  <td className="px-2 md:px-6 py-3 md:py-4 hidden sm:table-cell">
-                    <div className="flex items-center gap-2">
-                      <div className="w-12 md:w-16 h-1.5 bg-[--bg-raised] rounded-full overflow-hidden">
+                  <td className="px-3 md:px-4 py-3 hidden sm:table-cell">
+                    <div className="flex items-center justify-center gap-1.5">
+                      <div className="w-20 md:w-24 h-1.5 bg-[--bg-raised] rounded-full overflow-hidden">
                         <div className={cn('h-full rounded-full',
                           doc.confidence >= 90 ? 'bg-green-500' : doc.confidence >= 70 ? 'bg-amber-500' : 'bg-red-500'
                         )} style={{ width: `${doc.confidence}%` }} />
@@ -369,7 +391,7 @@ export function DocumentLibrary() {
                       <span className="text-xs font-semibold text-[--text-secondary]">{doc.confidence}%</span>
                     </div>
                   </td>
-                  <td className="px-2 md:px-6 py-3 md:py-4 hidden sm:table-cell">
+                  <td className="px-3 md:px-4 py-3 hidden sm:table-cell text-center">
                     <span className={cn('px-2 py-1 rounded-full text-xs font-semibold whitespace-nowrap',
                       doc.status === 'Pending Review' && 'bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 ring-1 ring-amber-400/40',
                       doc.status === 'Auto OK' && 'bg-[--bg-raised] text-[--text-secondary]',
@@ -379,7 +401,7 @@ export function DocumentLibrary() {
                     )}>{doc.status}</span>
                   </td>
 
-                  <td className="px-1 md:px-4 py-3 md:py-4">
+                  <td className="px-2 py-3 text-center">
                     <RowMenu docId={doc.id} onDelete={() => setDeleteConfirm(doc.id)} />
                   </td>
                 </tr>

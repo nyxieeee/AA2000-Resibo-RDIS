@@ -12,6 +12,7 @@ export interface ExtractedData {
   taxType?: string;
   category?: string;
   vendor?: string;
+  registeredAddress?: string;
   lineItems?: ExtractedLineItem[];
   totalAmount?: number;
   vatableSales?: number;
@@ -92,6 +93,7 @@ export function buildDocumentRecord(
     name: file?.name ?? fileName ?? 'camera-capture.jpg',
     type: extracted.documentType || 'Receipt',
     vendor: extracted.vendor || 'Unknown Vendor',
+    registeredAddress: extracted.registeredAddress || '',
     taxId:
       extracted.taxId && extracted.taxId.replace(/[^0-9-]/g, '').length >= 9
         ? extracted.taxId

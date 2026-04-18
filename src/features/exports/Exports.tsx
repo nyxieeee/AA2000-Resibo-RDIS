@@ -8,16 +8,7 @@ import { useDateFilter, matchesFilter } from '../../hooks/useDateFilter';
 import { DateRangeFilter } from '../../components/ui/DateRangeFilter';
 import type { DocumentRecord } from '../../types/document';
 
-// ─── Month helpers ────────────────────────────────────────────────────────────
-const MONTH_NAMES = [
-  'JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE',
-  'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER',
-];
-
-function deriveYear(docs: { date: string }[], fallback = new Date().getFullYear()): number {
-  const years = docs.map(d => new Date(d.date).getFullYear()).filter(Boolean);
-  return years.length ? Math.max(...years) : fallback;
-}
+import { getExportPeriodString, groupDocsByMonthYear } from '../../lib/exportUtils';
 
 async function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -29,21 +20,14 @@ async function downloadBlob(blob: Blob, filename: string) {
 
 // ─── Build Purchases & Expenses Journal workbook ──────────────────────────────
 async function buildPurchasesWorkbook(
-  docs: DocumentRecord[],
-  year: number,
+  docs: DocumentRecord[]
 ): Promise<Blob> {
   const wb = new ExcelJS.Workbook();
   const expenseDocs = docs.filter(d => d.category === 'Expense');
-  const byMonth: Record<number, typeof expenseDocs> = {};
-  expenseDocs.forEach(d => {
-    const m = new Date(d.date).getMonth();
-    if (!byMonth[m]) byMonth[m] = [];
-    byMonth[m].push(d);
-  });
+  const grouped = groupDocsByMonthYear(expenseDocs);
 
-  MONTH_NAMES.forEach((_, mi) => {
-    const rows = byMonth[mi] ?? [];
-    const ws = wb.addWorksheet(`${MONTH_NAMES[mi]} ${year}`);
+  grouped.forEach(({ year, monthName, docs: rows }) => {
+    const ws = wb.addWorksheet(`${monthName} ${year}`);
     ws.columns = [
       { width: 4 }, { width: 12 }, { width: 5 }, { width: 18 }, { width: 20 },
       { width: 14 }, { width: 32 }, { width: 45 }, { width: 12 }, { width: 12 },
@@ -79,7 +63,7 @@ async function buildPurchasesWorkbook(
       const rowNum = 6 + i;
       ws.addRow([
         null, doc.date, null, null, doc.taxId, doc.category,
-        doc.vendor, null, null, null, 'SALES INVOICE', doc.docNum,
+        doc.vendor, doc.registeredAddress || '', null, null, 'SALES INVOICE', doc.docNum,
         { formula: `(P${rowNum}-N${rowNum})/1.12` }, null,
         { formula: `M${rowNum}*0.12` }, doc.total,
       ]);
@@ -91,21 +75,14 @@ async function buildPurchasesWorkbook(
 
 // ─── Build VAT Sales workbook ─────────────────────────────────────────────────
 async function buildVatSalesWorkbook(
-  docs: DocumentRecord[],
-  year: number,
+  docs: DocumentRecord[]
 ): Promise<Blob> {
   const wb = new ExcelJS.Workbook();
   const revenueDocs = docs.filter(d => d.category === 'Revenue');
-  const byMonth: Record<number, typeof revenueDocs> = {};
-  revenueDocs.forEach(d => {
-    const m = new Date(d.date).getMonth();
-    if (!byMonth[m]) byMonth[m] = [];
-    byMonth[m].push(d);
-  });
+  const grouped = groupDocsByMonthYear(revenueDocs);
 
-  MONTH_NAMES.forEach((_, mi) => {
-    const rows = byMonth[mi] ?? [];
-    const ws = wb.addWorksheet(`${MONTH_NAMES[mi]} ${year}`);
+  grouped.forEach(({ year, monthName, docs: rows }) => {
+    const ws = wb.addWorksheet(`${monthName} ${year}`);
     ws.columns = [
       { width: 4 }, { width: 12 }, { width: 35 }, { width: 22 }, { width: 40 },
       { width: 16 }, { width: 18 }, { width: 18 }, { width: 14 }, { width: 18 },
@@ -115,8 +92,8 @@ async function buildVatSalesWorkbook(
     const dateEncoded = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }).toUpperCase();
     ws.addRow([]);
     ws.addRow([null, 'Company Name']);
-    ws.addRow([null, `${MONTH_NAMES[mi]} ${year}`]);
-    ws.addRow([null, `FOR THE PERIOD : ${MONTH_NAMES[mi].charAt(0)}${MONTH_NAMES[mi].slice(1).toLowerCase()} ${year}`]);
+    ws.addRow([null, `${monthName} ${year}`]);
+    ws.addRow([null, `FOR THE PERIOD : ${monthName.charAt(0)}${monthName.slice(1).toLowerCase()} ${year}`]);
     ws.addRow([null, `DATE ENCODED : ${dateEncoded}`]);
     ws.addRow([]);
     const totalRow = ws.addRow([
@@ -143,7 +120,7 @@ async function buildVatSalesWorkbook(
     rows.forEach((doc, i) => {
       const rowNum = 10 + i;
       ws.addRow([
-        null, doc.date, doc.vendor, doc.taxId, null,
+        null, doc.date, doc.vendor, doc.taxId, doc.registeredAddress || '',
         'SALES INVOICE', doc.docNum,
         { formula: `J${rowNum}/1.12` }, { formula: `H${rowNum}*0.12` },
         doc.total, null, null, null,
@@ -172,16 +149,8 @@ export function Exports() {
   const expenseCount  = filteredDocs.filter(d => d.category === 'Expense').length;
   const revenueCount  = filteredDocs.filter(d => d.category === 'Revenue').length;
 
-  // Derive the export year dynamically:
-  // - yearly/quarterly → use the selected year from the filter
-  // - custom           → use the start date's year
-  // - all              → infer from actual document dates
-  const year =
-    filter.mode === 'yearly' || filter.mode === 'quarterly'
-      ? filter.year
-      : filter.mode === 'custom' && filter.startDate
-      ? new Date(filter.startDate + 'T00:00:00').getFullYear()
-      : deriveYear(filteredDocs);
+  // Determine period for filename
+  const period = getExportPeriodString(filteredDocs, filter);
 
   const handleExport = async () => {
     if (filteredDocs.length === 0) { alert('No documents match the selected date range.'); return; }
@@ -190,17 +159,17 @@ export function Exports() {
     try {
       if (exportType === 'purchases') {
         if (expenseCount === 0) { alert('No expense documents in selected range.'); return; }
-        const blob = await buildPurchasesWorkbook(filteredDocs, year);
-        await downloadBlob(blob, `PURCHASES_AND_EXPENSES_JOURNAL_${year}.xlsx`);
+        const blob = await buildPurchasesWorkbook(filteredDocs);
+        await downloadBlob(blob, `PURCHASES_AND_EXPENSES_JOURNAL_${period}.xlsx`);
         addNotification(userId, { title: 'Export Successful', message: `Downloaded Purchases & Expenses Journal with ${expenseCount} records.`, type: 'success' });
       } else if (exportType === 'vat') {
         if (revenueCount === 0) { alert('No revenue documents in selected range.'); return; }
-        const blob = await buildVatSalesWorkbook(filteredDocs, year);
-        await downloadBlob(blob, `VAT_SALES_TO_BE_REPORTED_${year}.xlsx`);
+        const blob = await buildVatSalesWorkbook(filteredDocs);
+        await downloadBlob(blob, `VAT_SALES_TO_BE_REPORTED_${period}.xlsx`);
         addNotification(userId, { title: 'Export Successful', message: `Downloaded VAT Sales Journal with ${revenueCount} records.`, type: 'success' });
       } else {
         const fields = [
-          'Document Name', 'Vendor Name', 'Document #', 'Transaction Date',
+          'Document Name', 'Vendor Name', 'Registered Address', 'Document #', 'Transaction Date',
           'Total Amount', 'VATable Sales', 'VAT Amount', 'Zero-Rated Sales',
           'Category', 'Confidence', 'Status',
         ];
@@ -208,17 +177,18 @@ export function Exports() {
           fields.map(col => {
             let val: string | number = '';
             switch (col) {
-              case 'Document Name':    val = doc.name; break;
-              case 'Vendor Name':      val = doc.vendor; break;
-              case 'Document #':       val = doc.docNum; break;
-              case 'Transaction Date': val = doc.date; break;
-              case 'Total Amount':     val = doc.total; break;
-              case 'VATable Sales':    val = doc.vatableSales; break;
-              case 'VAT Amount':       val = doc.vat; break;
-              case 'Zero-Rated Sales': val = doc.zeroRatedSales; break;
-              case 'Category':         val = doc.category; break;
-              case 'Confidence':       val = `${doc.confidence}%`; break;
-              case 'Status':           val = doc.status; break;
+              case 'Document Name':       val = doc.name; break;
+              case 'Vendor Name':        val = doc.vendor; break;
+              case 'Registered Address': val = doc.registeredAddress || ''; break;
+              case 'Document #':         val = doc.docNum; break;
+              case 'Transaction Date':   val = doc.date; break;
+              case 'Total Amount':       val = doc.total; break;
+              case 'VATable Sales':      val = doc.vatableSales; break;
+              case 'VAT Amount':         val = doc.vat; break;
+              case 'Zero-Rated Sales':   val = doc.zeroRatedSales; break;
+              case 'Category':           val = doc.category; break;
+              case 'Confidence':         val = `${doc.confidence}%`; break;
+              case 'Status':             val = doc.status; break;
             }
             if (typeof val === 'string' && (val.includes(',') || val.includes('"')))
               return `"${val.replace(/"/g, '""')}"`;

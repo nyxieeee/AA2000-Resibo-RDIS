@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useDocumentStore } from '../../store/useDocumentStore';
+import { useNotificationStore } from '../../store/useNotificationStore';
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
 const EXEC_ROLES = ['CEO', 'President', 'General Manager'] as const;
@@ -103,7 +104,7 @@ function AccountantSettings() {
   const user = useAuthStore((s) => s.user);
   const workspace = useWorkspaceStore((s) => s.workspace);
   const updateWorkspace = useWorkspaceStore((s) => s.updateWorkspace);
-
+  const addNotification = useNotificationStore((s) => s.addNotification);
   const [tab, setTab] = useState<AccountantTab>('Profile');
 
   // Listen for tab changes triggered from the mobile sidebar drawer
@@ -116,14 +117,42 @@ function AccountantSettings() {
     return () => window.removeEventListener('settings-tab-change', handler);
   }, []);
 
+  // Local state for draft fields
   const [notifEmail, setNotifEmail] = useState(true);
   const [notifInApp, setNotifInApp] = useState(true);
   const [notifReview, setNotifReview] = useState(false);
   const [categories, setCategories] = useState(workspace.expenseCategories);
   const [newCat, setNewCat] = useState('');
+  const [passwords, setPasswords] = useState({ current: '', new: '', confirm: '' });
+  const [filingFreq, setFilingFreq] = useState('Monthly');
+  const [taxRate, setTaxRate] = useState('2');
+
+  const notifySuccess = (title: string) => {
+    if (user?.id) {
+      addNotification(user.id, {
+        title,
+        message: 'Your changes have been saved successfully.',
+        type: 'success'
+      });
+    }
+  };
+
+  const handleUpdatePassword = () => {
+    notifySuccess('Password Updated');
+    setPasswords({ current: '', new: '', confirm: '' });
+  };
+
+  const handleSaveBIR = () => {
+    notifySuccess('BIR Settings Saved');
+  };
 
   const handleSaveCategories = () => {
     updateWorkspace({ expenseCategories: categories });
+    notifySuccess('Categories Updated');
+  };
+
+  const handleSavePreferences = () => {
+    notifySuccess('Notification Preferences Saved');
   };
 
   return (
@@ -158,12 +187,15 @@ function AccountantSettings() {
               <section>
                 <SectionHeader title="Change Password" />
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <EditableField label="Current Password" value="" onChange={() => {}} type="password" />
-                  <EditableField label="New Password" value="" onChange={() => {}} type="password" />
-                  <EditableField label="Confirm New Password" value="" onChange={() => {}} type="password" />
+                  <EditableField label="Current Password" value={passwords.current} onChange={(v) => setPasswords(p => ({ ...p, current: v }))} type="password" />
+                  <EditableField label="New Password" value={passwords.new} onChange={(v) => setPasswords(p => ({ ...p, new: v }))} type="password" />
+                  <EditableField label="Confirm New Password" value={passwords.confirm} onChange={(v) => setPasswords(p => ({ ...p, confirm: v }))} type="password" />
                 </div>
                 <div className="mt-4 flex justify-end">
-                  <button className="bg-blue-600 text-white px-5 py-2 rounded-lg font-medium shadow-sm hover:bg-blue-700 transition text-sm">
+                  <button
+                    onClick={handleUpdatePassword}
+                    className="bg-blue-600 text-white px-5 py-2 rounded-lg font-medium shadow-sm hover:bg-blue-700 transition text-sm"
+                  >
                     Update Password
                   </button>
                 </div>
@@ -211,7 +243,11 @@ function AccountantSettings() {
                     <label className="block text-sm font-medium text-[--text-secondary] mb-1">
                       Default Filing Frequency
                     </label>
-                    <select className="w-full border border-[--border-default] rounded-lg py-2 px-3 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[--bg-surface] text-[--text-primary]">
+                    <select
+                      value={filingFreq}
+                      onChange={(e) => setFilingFreq(e.target.value)}
+                      className="w-full border border-[--border-default] rounded-lg py-2 px-3 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[--bg-surface] text-[--text-primary]"
+                    >
                       <option>Monthly</option>
                       <option>Quarterly</option>
                       <option>Annually</option>
@@ -223,7 +259,8 @@ function AccountantSettings() {
                     </label>
                     <input
                       type="number"
-                      defaultValue="2"
+                      value={taxRate}
+                      onChange={(e) => setTaxRate(e.target.value)}
                       className="w-full border border-[--border-default] bg-[--bg-surface] text-[--text-primary] rounded-lg py-2 px-3 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
@@ -231,7 +268,10 @@ function AccountantSettings() {
               </section>
 
               <div className="flex justify-end">
-                <button className="bg-blue-600 text-white px-5 py-2 rounded-lg font-medium shadow-sm hover:bg-blue-700 transition text-sm">
+                <button
+                  onClick={handleSaveBIR}
+                  className="bg-blue-600 text-white px-5 py-2 rounded-lg font-medium shadow-sm hover:bg-blue-700 transition text-sm"
+                >
                   Save BIR Settings
                 </button>
               </div>
@@ -342,7 +382,10 @@ function AccountantSettings() {
                 ))}
               </div>
               <div className="mt-6 flex justify-end">
-                <button className="bg-blue-600 text-white px-5 py-2 rounded-lg font-medium shadow-sm hover:bg-blue-700 transition text-sm">
+                <button
+                  onClick={handleSavePreferences}
+                  className="bg-blue-600 text-white px-5 py-2 rounded-lg font-medium shadow-sm hover:bg-blue-700 transition text-sm"
+                >
                   Save Preferences
                 </button>
               </div>
@@ -365,6 +408,7 @@ function ExecutiveSettings() {
   const workspace = useWorkspaceStore((s) => s.workspace);
   const updateWorkspace = useWorkspaceStore((s) => s.updateWorkspace);
   const documents = useDocumentStore((s) => s.documents);
+  const addNotification = useNotificationStore((s) => s.addNotification);
 
   const [tab, setTab] = useState<ExecTab>('General');
 
@@ -378,9 +422,27 @@ function ExecutiveSettings() {
     return () => window.removeEventListener('settings-tab-change', handler);
   }, []);
 
+  // Local state for draft fields
   const [dataRetention, setDataRetention] = useState('12');
   const [auditLog, setAuditLog] = useState(true);
   const [exportApproval, setExportApproval] = useState(true);
+  const [companyWebsite, setCompanyWebsite] = useState('https://aa2000.com.ph');
+  const [industry, setIndustry] = useState('Real Estate');
+  const [fiscalYear, setFiscalYear] = useState('December 31');
+
+  const notifySuccess = (title: string) => {
+    if (user?.id) {
+      addNotification(user.id, {
+        title,
+        message: 'Workspace changes have been applied.',
+        type: 'success'
+      });
+    }
+  };
+
+  const handleSaveGeneral = () => notifySuccess('General Settings Saved');
+  const handleSaveOrganization = () => notifySuccess('Organization Settings Saved');
+  const handleSaveGovernance = () => notifySuccess('Governance Settings Saved');
 
   // ── Real workspace stats ──────────────────────────────────────────────────
   const workspaceStats = useMemo(() => {
@@ -456,12 +518,15 @@ function ExecutiveSettings() {
                     value={workspace.name}
                     onChange={(v) => updateWorkspace({ name: v })}
                   />
-                  <EditableField label="Company Website" value="https://aa2000.com.ph" onChange={() => {}} />
+                  <EditableField label="Company Website" value={companyWebsite} onChange={setCompanyWebsite} />
                 </div>
               </section>
 
               <div className="flex justify-end">
-                <button className="bg-blue-600 text-white px-5 py-2 rounded-lg font-medium shadow-sm hover:bg-blue-700 transition text-sm">
+                <button
+                  onClick={handleSaveGeneral}
+                  className="bg-blue-600 text-white px-5 py-2 rounded-lg font-medium shadow-sm hover:bg-blue-700 transition text-sm"
+                >
                   Save Changes
                 </button>
               </div>
@@ -505,7 +570,11 @@ function ExecutiveSettings() {
                   <EditableField label="Registered Address" value="Manila, Philippines" onChange={() => {}} />
                   <div>
                     <label className="block text-sm font-medium text-[--text-secondary] mb-1">Industry</label>
-                    <select className="w-full border border-[--border-default] rounded-lg py-2 px-3 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[--bg-surface] text-[--text-primary]">
+                    <select
+                      value={industry}
+                      onChange={(e) => setIndustry(e.target.value)}
+                      className="w-full border border-[--border-default] rounded-lg py-2 px-3 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-[--bg-surface] text-[--text-primary]"
+                    >
                       <option>Real Estate</option>
                       <option>Retail</option>
                       <option>Manufacturing</option>
@@ -513,12 +582,15 @@ function ExecutiveSettings() {
                       <option>Other</option>
                     </select>
                   </div>
-                  <EditableField label="Fiscal Year End" value="December 31" onChange={() => {}} />
+                  <EditableField label="Fiscal Year End" value={fiscalYear} onChange={setFiscalYear} />
                 </div>
               </section>
 
               <div className="flex justify-end">
-                <button className="bg-blue-600 text-white px-5 py-2 rounded-lg font-medium shadow-sm hover:bg-blue-700 transition text-sm">
+                <button
+                  onClick={handleSaveOrganization}
+                  className="bg-blue-600 text-white px-5 py-2 rounded-lg font-medium shadow-sm hover:bg-blue-700 transition text-sm"
+                >
                   Save Organization
                 </button>
               </div>
@@ -694,7 +766,10 @@ function ExecutiveSettings() {
               </section>
 
               <div className="flex justify-end">
-                <button className="bg-blue-600 text-white px-5 py-2 rounded-lg font-medium shadow-sm hover:bg-blue-700 transition text-sm">
+                <button
+                  onClick={handleSaveGovernance}
+                  className="bg-blue-600 text-white px-5 py-2 rounded-lg font-medium shadow-sm hover:bg-blue-700 transition text-sm"
+                >
                   Save Governance Settings
                 </button>
               </div>

@@ -1,10 +1,11 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, CheckCircle2, XCircle, RotateCcw, Loader2, ZoomIn, ZoomOut, Maximize2, RotateCw } from 'lucide-react';
+import { ArrowLeft, Save, CheckCircle2, XCircle, RotateCcw, Loader2, ZoomIn, ZoomOut, Maximize2, Minimize2, RotateCw, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useDocumentStore } from '../../store/useDocumentStore';
 import { useNotificationStore } from '../../store/useNotificationStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import type { DocumentRecord, TaxType } from '../../types/document';
 
 function computeTax(total: number, taxType: TaxType = 'VAT') {
@@ -33,6 +34,7 @@ export function DocumentDetail() {
   const isAccountant = user?.role === 'Accountant';
   const [isSaved, setIsSaved] = useState(false);
   const [showMobilePreview, setShowMobilePreview] = useState(false);
+  const [showFullscreen, setShowFullscreen] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -139,11 +141,12 @@ export function DocumentDetail() {
                   text: `You are a Philippine BIR receipt parser. Extract all fields from this receipt or invoice image and return ONLY a valid JSON object — no prose, no markdown fences. Use this exact shape:
 {
   "vendor": "string",
+  "registeredAddress": "full registered address of the vendor as printed on the document, or empty string",
   "taxId": "NNN-NNN-NNN-NNNNN or empty string",
   "documentNumber": "string",
   "documentType": "Receipt | Invoice | Bill | Other",
   "date": "YYYY-MM-DD",
-  "paymentMethod": "Cash | Credit Card | Debit Card | GCash | Check | Other",
+  "paymentMethod": "Cash | Debit Card | GCash | Check | Other",
   "totalAmount": number,
   "vatableSales": number,
   "vat": number,
@@ -181,18 +184,19 @@ Rules:
 
       const lineItems = Array.isArray(extracted.lineItems) && extracted.lineItems.length > 0
         ? (extracted.lineItems as { description?: string; qty?: number; price?: number; net?: number }[]).map((li, i: number) => ({
-            id: String(i + 1),
-            description: li.description || 'Item',
-            qty: Number(li.qty) || 1,
-            price: Number(li.price) || Number(li.net) || 0,
-            net: Number(li.net) || Number(li.price) || 0,
-            gross: Number(li.price) || Number(li.net) || 0,
-            disc: 0,
-          }))
+          id: String(i + 1),
+          description: li.description || 'Item',
+          qty: Number(li.qty) || 1,
+          price: Number(li.price) || Number(li.net) || 0,
+          net: Number(li.net) || Number(li.price) || 0,
+          gross: Number(li.price) || Number(li.net) || 0,
+          disc: 0,
+        }))
         : formData.lineItems;
 
       const updated: Partial<DocumentRecord> = {
         vendor: extracted.vendor || formData.vendor,
+        registeredAddress: (extracted.registeredAddress as string) || formData.registeredAddress || '',
         taxId: (extracted.taxId && extracted.taxId.replace(/[^0-9-]/g, '').length >= 9) ? extracted.taxId : formData.taxId,
         docNum: (extracted.documentNumber && extracted.documentNumber.length > 1) ? extracted.documentNumber : formData.docNum,
         date: (extracted.date && /^\d{4}-\d{2}-\d{2}$/.test(extracted.date)) ? extracted.date : formData.date,
@@ -229,7 +233,7 @@ Rules:
     : null;
 
   return (
-    <div className="h-full flex flex-col -m-6 md:-m-8">
+    <div className="flex flex-col lg:h-full -m-6 md:-m-8">
       {/* Header Toolbar */}
       <div className="bg-[--bg-surface] border-b border-[--border-default] px-4 md:px-6 py-3 md:py-4 flex items-center justify-between gap-2 shrink-0">
         <div className="flex items-center gap-2 md:gap-4 min-w-0">
@@ -287,35 +291,142 @@ Rules:
 
       {/* Mobile Image Preview (visible below lg) */}
       {imageSrc && (
-        <div className="lg:hidden shrink-0 border-b border-[--border-default] bg-[--bg-raised]">
+        <div className="lg:hidden shrink-0">
+          {/* Toggle header */}
           <button
             onClick={() => setShowMobilePreview(v => !v)}
-            className="w-full flex items-center justify-between px-4 py-2.5 text-xs font-bold text-slate-400 uppercase tracking-widest hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            className="w-full flex items-center justify-between px-4 py-3 transition-colors"
+            style={{
+              background: showMobilePreview
+                ? 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)'
+                : 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
+              borderBottom: '1px solid rgba(99,102,241,0.2)',
+            }}
           >
-            <span>Document Preview</span>
-            <span className="text-[--text-muted]">{showMobilePreview ? '▲ Hide' : '▼ Show'}</span>
+            <div className="flex items-center gap-2">
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'linear-gradient(135deg,#6366f1,#22d3ee)', boxShadow: '0 0 8px #6366f180' }} />
+              <span style={{ color: '#94a3b8', fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Document Preview</span>
+            </div>
+            <span style={{
+              fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.05em',
+              color: showMobilePreview ? '#22d3ee' : '#6366f1',
+              background: showMobilePreview ? 'rgba(34,211,238,0.1)' : 'rgba(99,102,241,0.1)',
+              border: `1px solid ${showMobilePreview ? 'rgba(34,211,238,0.3)' : 'rgba(99,102,241,0.3)'}`,
+              borderRadius: '999px', padding: '0.2rem 0.6rem',
+            }}>{showMobilePreview ? '▲ HIDE' : '▼ SHOW'}</span>
           </button>
+
           {showMobilePreview && (
-            <div className="relative flex items-center justify-center overflow-auto bg-slate-100 dark:bg-slate-900/60" style={{ maxHeight: '55vw', minHeight: 160 }}>
+            <div
+              className="relative flex items-center justify-center overflow-hidden"
+              style={{
+                minHeight: 200,
+                maxHeight: '72vw',
+                background: 'linear-gradient(160deg, #0a0f1e 0%, #111827 60%, #0a1628 100%)',
+                borderBottom: '1px solid rgba(99,102,241,0.15)',
+              }}
+            >
+              {/* Subtle grid pattern */}
+              <div style={{
+                position: 'absolute', inset: 0, pointerEvents: 'none',
+                backgroundImage: 'linear-gradient(rgba(99,102,241,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,0.04) 1px, transparent 1px)',
+                backgroundSize: '24px 24px',
+              }} />
+
               <img
                 src={imageSrc}
                 alt={formData.name}
                 draggable={false}
-                style={{ maxHeight: '55vw', maxWidth: '100%', objectFit: 'contain', transform: `rotate(${rotation}deg)` }}
+                style={{
+                  maxWidth: '92%',
+                  maxHeight: '66vw',
+                  objectFit: 'contain',
+                  transformOrigin: 'center center',
+                  transition: 'transform 0.25s cubic-bezier(0.4,0,0.2,1)',
+                  transform: `scale(${zoom}) rotate(${rotation}deg)`,
+                  borderRadius: '4px',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.05)',
+                }}
               />
-              <div className="absolute bottom-2 right-2 flex gap-1">
-                <button onClick={() => setZoom(z => Math.min(5, +(z + 0.25).toFixed(2)))} className="p-1.5 rounded bg-white/80 dark:bg-slate-800/80 shadow text-slate-600 hover:bg-white" title="Zoom in"><ZoomIn className="h-3.5 w-3.5" /></button>
-                <button onClick={() => setZoom(z => Math.max(0.5, +(z - 0.25).toFixed(2)))} className="p-1.5 rounded bg-white/80 dark:bg-slate-800/80 shadow text-slate-600 hover:bg-white" title="Zoom out"><ZoomOut className="h-3.5 w-3.5" /></button>
-                <button onClick={() => setRotation(r => (r + 90) % 360)} className="p-1.5 rounded bg-white/80 dark:bg-slate-800/80 shadow text-slate-600 hover:bg-white" title="Rotate"><RotateCw className="h-3.5 w-3.5" /></button>
-                <button onClick={() => { setZoom(1); setRotation(0); setPan({ x: 0, y: 0 }); }} className="p-1.5 rounded bg-white/80 dark:bg-slate-800/80 shadow text-slate-600 hover:bg-white" title="Reset"><Maximize2 className="h-3.5 w-3.5" /></button>
+
+              {/* Frosted pill controls */}
+              <div style={{
+                position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)',
+                display: 'flex', alignItems: 'center', gap: '0.35rem',
+                background: 'rgba(15,23,42,0.85)',
+                backdropFilter: 'blur(12px)',
+                border: '1px solid rgba(99,102,241,0.25)',
+                borderRadius: '999px',
+                padding: '0.3rem 0.6rem',
+                boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+                whiteSpace: 'nowrap',
+              }}>
+                <button onClick={() => setZoom(z => Math.min(4, +(z + 0.25).toFixed(2)))}
+                  style={{ background: 'rgba(99,102,241,0.2)', border: 'none', borderRadius: '999px', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#a5b4fc', cursor: 'pointer' }}
+                  title="Zoom in"><ZoomIn style={{ width: 14, height: 14 }} /></button>
+
+                <span style={{ color: '#64748b', fontSize: '0.65rem', fontFamily: 'monospace', fontWeight: 700, minWidth: 32, textAlign: 'center' }}>{Math.round(zoom * 100)}%</span>
+
+                <button onClick={() => setZoom(z => Math.max(0.25, +(z - 0.25).toFixed(2)))}
+                  style={{ background: 'rgba(99,102,241,0.2)', border: 'none', borderRadius: '999px', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#a5b4fc', cursor: 'pointer' }}
+                  title="Zoom out"><ZoomOut style={{ width: 14, height: 14 }} /></button>
+
+                <div style={{ width: 1, height: 16, background: 'rgba(99,102,241,0.3)', margin: '0 0.1rem' }} />
+
+                <button onClick={() => setRotation(r => (r + 90) % 360)}
+                  style={{ background: 'rgba(34,211,238,0.15)', border: 'none', borderRadius: '999px', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#67e8f9', cursor: 'pointer' }}
+                  title="Rotate"><RotateCw style={{ width: 14, height: 14 }} /></button>
+
+                <button onClick={() => setShowFullscreen(true)}
+                  style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.5), rgba(34,211,238,0.4))', border: 'none', borderRadius: '999px', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#e0e7ff', cursor: 'pointer' }}
+                  title="Fullscreen"><Maximize2 style={{ width: 14, height: 14 }} /></button>
               </div>
             </div>
           )}
         </div>
       )}
 
+      {/* Mobile Fullscreen Image Overlay */}
+      {showFullscreen && imageSrc && createPortal(
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          width: '100%', height: '100%', zIndex: 99999,
+          backgroundColor: '#000',
+          display: 'flex', flexDirection: 'column',
+        }}>
+          {/* Toolbar */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 1rem', backgroundColor: 'rgba(0,0,0,0.7)', flexShrink: 0 }}>
+            <span style={{ color: '#e2e8f0', fontSize: '0.75rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '40%' }}>{formData.name}</span>
+            <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+              <button onClick={() => setZoom(z => Math.min(6, +(z + 0.5).toFixed(2)))} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '0.375rem', padding: '0.5rem', color: '#fff', cursor: 'pointer', display: 'flex' }}><ZoomIn style={{ width: 18, height: 18 }} /></button>
+              <span style={{ color: '#94a3b8', fontSize: '0.7rem', fontFamily: 'monospace', minWidth: 34, textAlign: 'center' }}>{Math.round(zoom * 100)}%</span>
+              <button onClick={() => setZoom(z => Math.max(0.25, +(z - 0.5).toFixed(2)))} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '0.375rem', padding: '0.5rem', color: '#fff', cursor: 'pointer', display: 'flex' }}><ZoomOut style={{ width: 18, height: 18 }} /></button>
+              <button onClick={() => setRotation(r => (r + 90) % 360)} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '0.375rem', padding: '0.5rem', color: '#fff', cursor: 'pointer', display: 'flex' }}><RotateCw style={{ width: 18, height: 18 }} /></button>
+              <button onClick={() => { setZoom(1); setRotation(0); }} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '0.375rem', padding: '0.5rem', color: '#fff', cursor: 'pointer', display: 'flex' }}><Minimize2 style={{ width: 18, height: 18 }} /></button>
+              <button onClick={() => { setShowFullscreen(false); setZoom(1); setRotation(0); }} style={{ background: 'rgba(239,68,68,0.8)', border: 'none', borderRadius: '0.375rem', padding: '0.5rem', color: '#fff', cursor: 'pointer', display: 'flex', marginLeft: '0.25rem' }}><X style={{ width: 18, height: 18 }} /></button>
+            </div>
+          </div>
+          {/* Image */}
+          <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
+            <img
+              src={imageSrc}
+              alt={formData.name}
+              draggable={false}
+              style={{
+                maxWidth: '100%',
+                objectFit: 'contain',
+                transformOrigin: 'center center',
+                transition: 'transform 0.2s ease',
+                transform: `scale(${zoom}) rotate(${rotation}deg)`,
+              }}
+            />
+          </div>
+        </div>,
+        document.body
+      )}
+
       {/* Split Viewer */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex lg:overflow-hidden">
         {/* Document Viewer (Left) */}
         <div className="hidden lg:flex w-1/2 border-r border-[--border-default] flex-col relative bg-[--bg-raised]">
           {/* Toolbar */}
@@ -379,27 +490,27 @@ Rules:
                   const vr = viewerRef.current!.getBoundingClientRect();
                   // position of image within viewer
                   const imgLeft = ir.left - vr.left;
-                  const imgTop  = ir.top  - vr.top;
+                  const imgTop = ir.top - vr.top;
                   const LENS = 160;
-                  const MAG  = 3;
+                  const MAG = 3;
                   // cursor relative to image
                   const cx = hoverPos.x - imgLeft;
                   const cy = hoverPos.y - imgTop;
-                  const bgW = ir.width  * MAG;
+                  const bgW = ir.width * MAG;
                   const bgH = ir.height * MAG;
                   const bgX = -(cx * MAG - LENS / 2);
                   const bgY = -(cy * MAG - LENS / 2);
                   const viewerW = vr.width;
                   const viewerH = vr.height;
                   const clampedLeft = Math.max(0, Math.min(hoverPos.x - LENS / 2, viewerW - LENS));
-                  const clampedTop  = Math.max(0, Math.min(hoverPos.y - LENS / 2, viewerH - LENS));
+                  const clampedTop = Math.max(0, Math.min(hoverPos.y - LENS / 2, viewerH - LENS));
                   return (
                     <div
                       className="pointer-events-none absolute rounded-full border-2 border-blue-400/70 shadow-2xl overflow-hidden ring-1 ring-white/20"
                       style={{
                         width: LENS, height: LENS,
                         left: clampedLeft,
-                        top:  clampedTop,
+                        top: clampedTop,
                         backgroundImage: `url(${imageSrc})`,
                         backgroundSize: `${bgW}px ${bgH}px`,
                         backgroundPosition: `${bgX}px ${bgY}px`,
@@ -419,7 +530,7 @@ Rules:
         </div>
 
         {/* Data Panel (Right) */}
-        <div className="w-full lg:w-1/2 overflow-y-auto bg-[--bg-surface] px-6 pt-6 pb-0 md:px-8 md:pt-8 md:pb-0 space-y-6">
+        <div className="w-full lg:w-1/2 lg:overflow-y-auto bg-[--bg-surface] px-6 pt-6 pb-8 md:px-8 md:pt-8 md:pb-10 space-y-6">
 
           <section>
             <h3 className="text-lg font-semibold text-[--text-primary] mb-4 pb-2 border-b border-[--border-subtle]">Extracted Details</h3>
@@ -429,8 +540,11 @@ Rules:
               <Field label="Document Number" value={formData.docNum} confidence={formData.confidence + 2} onChange={(v) => handleChange('docNum', v)} />
               <Field label="Transaction Date" value={formData.date} confidence={formData.confidence + 1} onChange={(v) => handleChange('date', v)} />
               <Field label="Expense Category" value={formData.category} confidence={formData.confidence - 5} type="select" options={['Expense', 'Revenue', 'Asset', 'Liability', 'Uncategorized', 'Utility / Communications', 'Travel', 'Meals', 'Supplies', 'Fuel']} onChange={(v) => handleChange('category', v)} />
-              <Field label="Payment Method" value={formData.paymentMethod || 'Credit Card'} confidence={formData.confidence} type="select" options={['Credit Card', 'Cash', 'Bank Transfer']} onChange={(v) => handleChange('paymentMethod', v)} />
+              <Field label="Payment Method" value={formData.paymentMethod || 'Debit Card'} confidence={formData.confidence} type="select" options={['Debit Card', 'Cash', 'Bank Transfer']} onChange={(v) => handleChange('paymentMethod', v)} />
               <Field label="Tax Type" value={formData.taxType || 'VAT'} confidence={formData.confidence} type="select" options={['VAT', 'Exempt', 'Zero-Rated', 'Amusement Tax']} onChange={(v) => handleChange('taxType', v as TaxType)} />
+              <div className="col-span-2">
+                <Field label="Registered Address" value={formData.registeredAddress || ''} confidence={formData.confidence - 2} onChange={(v) => handleChange('registeredAddress', v)} />
+              </div>
             </div>
           </section>
 
@@ -450,13 +564,13 @@ Rules:
                   {formData.lineItems.map(item => (
                     <tr key={item.id} className="hover:bg-[--bg-raised]/40 transition-colors">
                       <td className="px-3 py-2.5">
-                        <input className="w-full bg-[--bg-raised] border border-[--border-default] rounded-md px-3 py-2 text-sm text-[--text-primary] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors" value={item.description} onChange={(e) => { const updated = formData.lineItems.map(li => li.id === item.id ? {...li, description: e.target.value} : li); setFormData({...formData, lineItems: updated}); }} />
+                        <input className="w-full bg-[--bg-raised] border border-[--border-default] rounded-md px-3 py-2 text-sm text-[--text-primary] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors" value={item.description} onChange={(e) => { const updated = formData.lineItems.map(li => li.id === item.id ? { ...li, description: e.target.value } : li); setFormData({ ...formData, lineItems: updated }); }} />
                       </td>
                       <td className="px-3 py-2.5 w-20">
-                        <input className="w-full bg-[--bg-raised] border border-[--border-default] rounded-md px-3 py-2 text-sm text-right text-[--text-primary] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors" value={item.qty} onChange={(e) => { const q = Number(e.target.value) || 1; const updated = formData.lineItems.map(li => li.id === item.id ? {...li, qty: q, net: li.price * q} : li); setFormData({...formData, lineItems: updated}); }} />
+                        <input className="w-full bg-[--bg-raised] border border-[--border-default] rounded-md px-3 py-2 text-sm text-right text-[--text-primary] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors" value={item.qty} onChange={(e) => { const q = Number(e.target.value) || 1; const updated = formData.lineItems.map(li => li.id === item.id ? { ...li, qty: q, net: li.price * q } : li); setFormData({ ...formData, lineItems: updated }); }} />
                       </td>
                       <td className="px-3 py-2.5 w-28">
-                        <input className="w-full bg-[--bg-raised] border border-[--border-default] rounded-md px-3 py-2 text-sm text-right text-[--text-primary] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors" value={item.price} onChange={(e) => { const v = Number(e.target.value) || 0; const updated = formData.lineItems.map(li => li.id === item.id ? {...li, price: v, net: v * li.qty} : li); setFormData({...formData, lineItems: updated}); }} />
+                        <input className="w-full bg-[--bg-raised] border border-[--border-default] rounded-md px-3 py-2 text-sm text-right text-[--text-primary] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors" value={item.price} onChange={(e) => { const v = Number(e.target.value) || 0; const updated = formData.lineItems.map(li => li.id === item.id ? { ...li, price: v, net: v * li.qty } : li); setFormData({ ...formData, lineItems: updated }); }} />
                       </td>
                       <td className="px-4 py-2.5 w-32 text-right font-semibold text-[--text-primary] whitespace-nowrap">₱{item.net.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                     </tr>
@@ -464,35 +578,34 @@ Rules:
                 </tbody>
               </table>
             </div>
-            <button onClick={() => { const newItem = { id: String(Date.now()), description: '', qty: 1, price: 0, net: 0 }; setFormData({...formData, lineItems: [...formData.lineItems, newItem]}); }} className="text-sm text-blue-600 font-medium mt-3 hover:text-blue-700">+ Add Line Item</button>
+            <button onClick={() => { const newItem = { id: String(Date.now()), description: '', qty: 1, price: 0, net: 0 }; setFormData({ ...formData, lineItems: [...formData.lineItems, newItem] }); }} className="text-sm text-blue-600 font-medium mt-3 hover:text-blue-700">+ Add Line Item</button>
           </section>
 
           <section>
             <h3 className="text-lg font-semibold text-[--text-primary] mb-4 pb-2 border-b border-[--border-subtle] flex items-center gap-3">
-                Tax & Financial Summary
-                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                  formData.taxType === 'VAT' || !formData.taxType ? 'bg-blue-100 text-blue-700' :
+              Tax & Financial Summary
+              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${formData.taxType === 'VAT' || !formData.taxType ? 'bg-blue-100 text-blue-700' :
                   formData.taxType === 'Amusement Tax' ? 'bg-purple-100 text-purple-700' :
-                  'bg-[--bg-raised] text-[--text-secondary]'
+                    'bg-[--bg-raised] text-[--text-secondary]'
                 }`}>{formData.taxType || 'VAT'}</span>
-              </h3>
+            </h3>
             <div className="bg-[--bg-raised] rounded-lg p-5 border border-[--border-subtle]">
               <div className="space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-[--text-muted]">VATable Sales</span>
-                  <span className="font-medium text-[--text-primary]">₱ {derivedVatableSales.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                <div className="flex justify-between gap-4 text-sm">
+                  <span className="text-[--text-muted] min-w-0 truncate">VATable Sales</span>
+                  <span className="font-medium text-[--text-primary] whitespace-nowrap shrink-0">₱ {derivedVatableSales.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-[--text-muted]">VAT (12%)</span>
-                  <span className="font-medium text-[--text-primary]">₱ {derivedVat.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                <div className="flex justify-between gap-4 text-sm">
+                  <span className="text-[--text-muted] min-w-0 truncate">VAT (12%)</span>
+                  <span className="font-medium text-[--text-primary] whitespace-nowrap shrink-0">₱ {derivedVat.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-[--text-muted]">Zero-Rated Sales</span>
-                  <span className="font-medium text-[--text-primary]">₱ {derivedZeroRated.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                <div className="flex justify-between gap-4 text-sm">
+                  <span className="text-[--text-muted] min-w-0 truncate">Zero-Rated Sales</span>
+                  <span className="font-medium text-[--text-primary] whitespace-nowrap shrink-0">₱ {derivedZeroRated.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                 </div>
-                <div className="pt-3 border-t border-[--border-default] flex justify-between font-bold text-lg mt-2">
-                  <span className="text-[--text-primary]">Total Amount</span>
-                  <span className="text-blue-600">₱ {derivedTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                <div className="pt-3 border-t border-[--border-default] flex justify-between gap-4 font-bold text-lg mt-2">
+                  <span className="text-[--text-primary] min-w-0 truncate">Total Amount</span>
+                  <span className="text-blue-600 whitespace-nowrap shrink-0">₱ {derivedTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                 </div>
               </div>
             </div>

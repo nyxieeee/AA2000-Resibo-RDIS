@@ -34,6 +34,7 @@ export interface DocumentRecord {
   datGenerated?: boolean;
   taxType?: TaxType;
   paymentMethod?: string;
+  registeredAddress?: string;
   imageData?: string;     // base64 of original image for viewer + reprocess
   imageType?: string;     // e.g. "image/jpeg"
 }
