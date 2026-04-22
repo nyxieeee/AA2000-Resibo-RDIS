@@ -168,11 +168,14 @@ export function DocumentDetail() {
       apiFormData.append('products', JSON.stringify(products));
 
       if (imageBlob) {
-        const ext = formData.imageType.split('/')[1] || 'jpeg';
+        const ext = (formData.imageType?.split('/')?.[1]) || 'jpeg';
         apiFormData.append('receiptImage', imageBlob, `receipt.${ext}`);
       }
 
-      const apiUrl = `${import.meta.env.VITE_API_URL}/project/save/rdis`;
+      const baseUrl = import.meta.env.DEV
+        ? '/api'
+        : (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+      const apiUrl = `${baseUrl}/project/save/rdis`;
       const response = await fetch(apiUrl, {
         method: 'POST',
         body: apiFormData

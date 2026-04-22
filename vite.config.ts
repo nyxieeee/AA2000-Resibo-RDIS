@@ -4,4 +4,14 @@ import tailwindcss from '@tailwindcss/vite'
 import mkcert from 'vite-plugin-mkcert'
 export default defineConfig({
   plugins: [tailwindcss(), react(), mkcert()],
+  server: {
+    proxy: {
+      '/api': {
+        target: 'https://desktop-0iik0rk.tail20a759.ts.net',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+    },
+  },
 })

@@ -1,4 +1,5 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://192.168.1.5:3001/api';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+const API_URL = import.meta.env.DEV ? '/api' : API_BASE_URL;
 
 export async function apiFetch(endpoint: string, options: RequestInit = {}) {
   const token = localStorage.getItem('aa2000-auth-token');
@@ -16,7 +17,7 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}) {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(error.error || `Request failed with status ${response.status}`);
+    throw new Error(error.error || error.message || `Request failed with status ${response.status}`);
   }
 
   return response.json();

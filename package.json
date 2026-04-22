@@ -8,10 +8,17 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "server": "cd server && npm run dev",
-    "dev:full": "npm run dev & npm run server"
+    "generate:assets": "npx --yes @capacitor/assets capacitor-assets generate --android",
+    "sync:android": "npx cap sync android",
+    "build:android": "npm run build && npm run generate:assets && npm run sync:android && cd android && gradlew assembleDebug"
   },
   "dependencies": {
+    "@capacitor/android": "^8.3.1",
+    "@capacitor/camera": "^8.1.0",
+    "@capacitor/cli": "^8.3.1",
+    "@capacitor/core": "^8.3.1",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/preferences": "^8.0.1",
     "@hookform/resolvers": "^5.2.2",
     "@ionic/pwa-elements": "^3.4.0",
     "@tailwindcss/vite": "^4.2.2",
