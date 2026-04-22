@@ -7,7 +7,7 @@ import { useAuthStore } from '../../store/useAuthStore';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import type { DocumentRecord, TaxType, DocumentStatus } from '../../types/document';
-import { apiFetch, API_URL } from '../../lib/api';
+import { apiFetch } from '../../lib/api';
 
 function computeTax(total: number, taxType: TaxType = 'VAT') {
   switch (taxType) {
@@ -173,7 +173,7 @@ export function DocumentDetail() {
         apiFormData.append('receiptImage', imageBlob, `receipt.${ext}`);
       }
 
-      const response = await apiFetch('/project/save/rdis', {
+      await apiFetch('/project/save/rdis', {
         method: 'POST',
         body: apiFormData
       });
