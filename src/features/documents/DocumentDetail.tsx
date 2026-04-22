@@ -174,7 +174,7 @@ export function DocumentDetail() {
 
       const baseUrl = import.meta.env.DEV
         ? '/api'
-        : (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+        : (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || 'https://desktop-0iik0rk.tail20a759.ts.net').replace(/\/+$/, '');
       const apiUrl = `${baseUrl}/project/save/rdis`;
       const response = await fetch(apiUrl, {
         method: 'POST',

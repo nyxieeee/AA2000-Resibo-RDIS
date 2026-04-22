@@ -1,4 +1,5 @@
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+const DEFAULT_API_BASE_URL = 'https://desktop-0iik0rk.tail20a759.ts.net';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
 const API_URL = import.meta.env.DEV ? '/api' : API_BASE_URL;
 
 export async function apiFetch(endpoint: string, options: RequestInit = {}) {
@@ -16,7 +17,9 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}) {
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+    const error = await response
+      .json()
+      .catch(() => ({ error: `Request failed (${response.status} ${response.statusText})` }));
     throw new Error(error.error || error.message || `Request failed with status ${response.status}`);
   }
 
