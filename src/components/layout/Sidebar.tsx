@@ -11,6 +11,14 @@ import { useAuthStore } from '../../store/useAuthStore';
 const execRoles = ['CEO', 'President', 'General Manager'];
 const allRoles  = [...execRoles, 'Accountant'];
 
+const normalizeRole = (role?: string) => (role || '').trim().toLowerCase();
+const hasAccess = (allowedRoles: string[], userRole?: string) => {
+  const normalizedUserRole = normalizeRole(userRole);
+  if (!normalizedUserRole) return false;
+  if (normalizedUserRole === 'admin') return true;
+  return allowedRoles.some((role) => normalizeRole(role) === normalizedUserRole);
+};
+
 const navItems = [
   { name: 'Dashboard',    path: '/dashboard', icon: LayoutDashboard, roles: allRoles },
   { name: 'ScanHub',      path: '/scanhub',   icon: UploadCloud,     roles: allRoles },
@@ -57,7 +65,7 @@ export function Sidebar() {
             Menu
           </div>
         )}
-        {navItems.filter(item => item.roles.includes(user.role)).map((item) => {
+        {navItems.filter(item => hasAccess(item.roles, user.role)).map((item) => {
           const isActive = location.pathname.startsWith(item.path);
           return (
             <Link

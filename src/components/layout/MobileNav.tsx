@@ -9,6 +9,14 @@ import { useAuthStore } from '../../store/useAuthStore';
 const execRoles = ['CEO', 'President', 'General Manager'];
 const allRoles = [...execRoles, 'Accountant'];
 
+const normalizeRole = (role?: string) => (role || '').trim().toLowerCase();
+const hasAccess = (allowedRoles: string[], userRole?: string) => {
+  const normalizedUserRole = normalizeRole(userRole);
+  if (!normalizedUserRole) return false;
+  if (normalizedUserRole === 'admin') return true;
+  return allowedRoles.some((role) => normalizeRole(role) === normalizedUserRole);
+};
+
 const mobileNavItems = [
   { name: 'Home', path: '/dashboard', icon: LayoutDashboard, roles: allRoles },
   { name: 'Scan', path: '/scanhub', icon: UploadCloud, roles: allRoles },
@@ -25,7 +33,7 @@ export function MobileNav() {
 
   if (!user) return null;
 
-  const visibleItems = mobileNavItems.filter(item => item.roles.includes(user.role));
+  const visibleItems = mobileNavItems.filter(item => hasAccess(item.roles, user.role));
 
   const handleSettingsTap = (e: React.MouseEvent) => {
     if (location.pathname.startsWith('/settings')) {
