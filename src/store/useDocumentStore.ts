@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { apiFetch } from '../lib/api';
 import type { DocumentRecord } from '../types/document';
 
+const USE_DOCUMENTS_API = (import.meta.env.VITE_USE_DOCUMENTS_API ?? 'false') === 'true';
+
 interface DocumentState {
   documents: DocumentRecord[];
   fetchDocuments: () => Promise<void>;
@@ -14,6 +16,7 @@ interface DocumentState {
 export const useDocumentStore = create<DocumentState>((set) => ({
   documents: [],
   fetchDocuments: async () => {
+    if (!USE_DOCUMENTS_API) return;
     try {
       const docs = await apiFetch('/documents');
       set({ documents: docs });
@@ -22,44 +25,45 @@ export const useDocumentStore = create<DocumentState>((set) => ({
     }
   },
   addDocument: async (doc) => {
+    // Always keep local UI responsive even when no /documents backend exists.
+    set((state) => ({ documents: [doc, ...state.documents] }));
+    if (!USE_DOCUMENTS_API) return;
     try {
       await apiFetch('/documents', {
         method: 'POST',
         body: JSON.stringify(doc),
       });
-      set((state) => ({ documents: [doc, ...state.documents] }));
     } catch (err) {
       console.error('Failed to add document:', err);
-      throw err;
     }
   },
   updateDocument: async (id, updates) => {
+    set((state) => ({
+      documents: state.documents.map((doc) =>
+        doc.id === id ? { ...doc, ...updates } : doc
+      ),
+    }));
+    if (!USE_DOCUMENTS_API) return;
     try {
       await apiFetch(`/documents/${id}`, {
         method: 'PATCH',
         body: JSON.stringify(updates),
       });
-      set((state) => ({
-        documents: state.documents.map((doc) =>
-          doc.id === id ? { ...doc, ...updates } : doc
-        ),
-      }));
     } catch (err) {
       console.error('Failed to update document:', err);
-      throw err;
     }
   },
   deleteDocument: async (id) => {
+    set((state) => ({
+      documents: state.documents.filter((doc) => doc.id !== id),
+    }));
+    if (!USE_DOCUMENTS_API) return;
     try {
       await apiFetch(`/documents/${id}`, {
         method: 'DELETE',
       });
-      set((state) => ({
-        documents: state.documents.filter((doc) => doc.id !== id),
-      }));
     } catch (err) {
       console.error('Failed to delete document:', err);
-      throw err;
     }
   },
   clearAll: () => set({ documents: [] }),
