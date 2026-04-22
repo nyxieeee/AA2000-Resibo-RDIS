@@ -1,0 +1,5 @@
+{
+  "css.customData": [],
+  "css.lint.unknownAtRules": "ignore",
+  "java.configuration.updateBuildConfiguration": "interactive"
+}
