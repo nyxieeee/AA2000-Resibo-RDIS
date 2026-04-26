@@ -64,7 +64,7 @@ export interface FinancialDocument {
 export interface User {
   id: string;
   email: string;
-  role: 'CEO' | 'President' | 'General Manager' | 'Accountant' | 'Viewer';
+  role: 'CEO' | 'President' | 'General Manager' | 'Accountant' | 'Marketing' | 'Viewer';
   firstName: string;
   lastName: string;
   darkMode: boolean;

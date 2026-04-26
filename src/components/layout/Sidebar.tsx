@@ -9,14 +9,38 @@ import { cn } from '../../lib/utils';
 import { useAuthStore } from '../../store/useAuthStore';
 
 const execRoles = ['CEO', 'President', 'General Manager'];
-const allRoles  = [...execRoles, 'Accountant'];
+const allRoles = [...execRoles, 'Accountant', 'Marketing', 'Viewer'];
 
 const normalizeRole = (role?: string) => (role || '').trim().toLowerCase();
+const ROLE_ALIASES: Record<string, string> = {
+  admin: 'admin',
+  ceo: 'ceo',
+  president: 'president',
+  'general manager': 'general manager',
+  gm: 'general manager',
+  accountant: 'accountant',
+  'finance officer': 'accountant',
+  'junior accountant': 'accountant',
+  marketing: 'marketing',
+  'marketing officer': 'marketing',
+  'marketing staff': 'marketing',
+  viewer: 'viewer',
+  staff: 'viewer',
+  user: 'viewer',
+};
+
+const canonicalRole = (role?: string) => {
+  const normalized = normalizeRole(role);
+  if (!normalized) return '';
+  return ROLE_ALIASES[normalized] || normalized;
+};
+
 const hasAccess = (allowedRoles: string[], userRole?: string) => {
-  const normalizedUserRole = normalizeRole(userRole);
-  if (!normalizedUserRole) return false;
-  if (normalizedUserRole === 'admin') return true;
-  return allowedRoles.some((role) => normalizeRole(role) === normalizedUserRole);
+  const current = canonicalRole(userRole);
+  if (!current) return false;
+  if (current === 'admin') return true;
+  const allowed = allowedRoles.map((role) => canonicalRole(role));
+  return allowed.includes(current);
 };
 
 const navItems = [

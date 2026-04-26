@@ -12,7 +12,16 @@ import { cn } from '../../lib/utils';
 // --- Section Headers & Helpers ---
 const EXEC_ROLES = ['CEO', 'President', 'General Manager'] as const;
 type ExecRole = typeof EXEC_ROLES[number];
-const isExec = (role: string): role is ExecRole => EXEC_ROLES.includes(role as ExecRole);
+const normalizeRole = (role?: string) => (role || '').trim().toLowerCase();
+const canonicalRole = (role?: string) => {
+  const normalized = normalizeRole(role);
+  if (normalized === 'gm') return 'general manager';
+  return normalized;
+};
+const isExec = (role: string): role is ExecRole => {
+  const current = canonicalRole(role);
+  return EXEC_ROLES.some((r) => canonicalRole(r) === current);
+};
 
 function SectionHeader({ title }: { title: string }) {
   return (
