@@ -8,27 +8,66 @@ import type { ExtractedData } from './scanUtils';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
-function fileToBase64(file: File): Promise<{ base64: string; mediaType: string }> {
+async function preprocessImage(imageSource: File | Blob): Promise<{ base64: string; mediaType: string }> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve({ base64: result.split(',')[1], mediaType: file.type });
-    };
-    reader.onerror = () => reject(new Error('Failed to read file'));
-    reader.readAsDataURL(file);
-  });
-}
+    const img = new Image();
+    const url = URL.createObjectURL(imageSource);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Failed to get canvas context'));
+        return;
+      }
 
-function blobToBase64(blob: Blob, mimeType: string): Promise<{ base64: string; mediaType: string }> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve({ base64: result.split(',')[1], mediaType: mimeType });
+      // Limit size for optimal AI processing while maintaining clarity
+      const MAX_SIZE = 1600;
+      let width = img.width;
+      let height = img.height;
+
+      if (width > height) {
+        if (width > MAX_SIZE) {
+          height *= MAX_SIZE / width;
+          width = MAX_SIZE;
+        }
+      } else {
+        if (height > MAX_SIZE) {
+          width *= MAX_SIZE / height;
+          height = MAX_SIZE;
+        }
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      ctx.drawImage(img, 0, 0, width, height);
+      
+      const imageData = ctx.getImageData(0, 0, width, height);
+      const data = imageData.data;
+      
+      // Contrast boost factor (1.2 = 20% increase)
+      const contrast = 1.2;
+      const intercept = 128 * (1 - contrast);
+
+      for (let i = 0; i < data.length; i += 4) {
+        // Luminosity-based grayscale
+        let gray = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
+        
+        // Basic contrast enhancement
+        gray = gray * contrast + intercept;
+        const final = Math.max(0, Math.min(255, gray));
+        
+        data[i] = final;
+        data[i + 1] = final;
+        data[i + 2] = final;
+      }
+      
+      ctx.putImageData(imageData, 0, 0);
+      const base64 = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+      resolve({ base64, mediaType: 'image/jpeg' });
     };
-    reader.onerror = () => reject(new Error('Failed to read blob'));
-    reader.readAsDataURL(blob);
+    img.onerror = () => reject(new Error('Failed to process image'));
+    img.src = url;
   });
 }
 
@@ -247,8 +286,8 @@ export function ScanHub() {
     setIsProcessing(true);
     setError(null);
     try {
-      setProcessingStep('Reading image...');
-      const { base64, mediaType } = await fileToBase64(file);
+      setProcessingStep('Preprocessing image (Grayscale & Contrast)...');
+      const { base64, mediaType } = await preprocessImage(file);
       setProcessingStep('Analyzing with Llama 4 Scout Vision...');
       const extracted = await callGroqVision(apiKey, base64, mediaType);
       setProcessingStep('Building document record...');
@@ -275,8 +314,8 @@ export function ScanHub() {
     setIsProcessing(true);
     setError(null);
     try {
-      setProcessingStep('Reading captured image...');
-      const { base64, mediaType } = await blobToBase64(blob, 'image/jpeg');
+      setProcessingStep('Preprocessing captured image...');
+      const { base64, mediaType } = await preprocessImage(blob);
       setProcessingStep('Analyzing with Llama 4 Scout Vision...');
       const extracted = await callGroqVision(apiKey, base64, mediaType);
       setProcessingStep('Building document record...');
