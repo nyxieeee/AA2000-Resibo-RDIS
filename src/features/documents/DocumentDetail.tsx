@@ -218,34 +218,24 @@ export function DocumentDetail() {
       setReprocessError('No image data available to reprocess. Please re-upload the document from ScanHub.');
       return;
     }
-    const groqKey = import.meta.env.VITE_GROQ_API_KEY;
-    if (!groqKey) {
-      setReprocessError('VITE_GROQ_API_KEY is not set. Add it to your .env file and restart the dev server.');
+    const geminiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (!geminiKey) {
+      setReprocessError('VITE_GEMINI_API_KEY is not set. Add it to your .env file and restart the dev server.');
       return;
     }
     setIsReprocessing(true);
     setReprocessError(null);
     try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(geminiKey)}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${groqKey}`,
         },
         body: JSON.stringify({
-          model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-          max_tokens: 1024,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'image_url',
-                  image_url: { url: `data:${formData.imageType};base64,${formData.imageData}` },
-                },
-                {
-                  type: 'text',
-                  text: `You are a Philippine BIR receipt parser. Extract all fields from this receipt or invoice image and return ONLY a valid JSON object — no prose, no markdown fences. Use this exact shape:
+          contents: [{
+            parts: [
+              {
+                text: `You are a Philippine BIR receipt parser. Extract all fields from this receipt or invoice image and return ONLY a valid JSON object — no prose, no markdown fences. Use this exact shape:
 {
   "vendor": "string",
   "registeredAddress": "full registered address of the vendor as printed on the document, or empty string",
@@ -266,20 +256,31 @@ Rules:
 - vatableSales = totalAmount / 1.12 (for VAT receipts), vat = totalAmount - vatableSales
 - confidence: 90+ if all major fields found, 75-89 if some missing, below 75 if image is unclear
 - If a field cannot be determined, use an empty string or 0`,
+              },
+              {
+                inlineData: {
+                  mimeType: formData.imageType,
+                  data: formData.imageData,
                 },
-              ],
-            },
-          ],
+              },
+            ],
+          }],
+          generationConfig: {
+            maxOutputTokens: 1024,
+            temperature: 0.1,
+          },
         }),
       });
 
       if (!response.ok) {
         const errBody = await response.json().catch(() => ({}));
-        throw new Error(errBody?.error?.message || `Groq API error ${response.status}`);
+        throw new Error(errBody?.error?.message || `Gemini API error ${response.status}`);
       }
 
-      const groqData = await response.json();
-      const rawText = groqData.choices?.[0]?.message?.content ?? '';
+      const geminiData = await response.json() as {
+        candidates?: { content?: { parts?: { text?: string }[] } }[];
+      };
+      const rawText = geminiData.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('') ?? '';
       // Strip optional markdown fences before parsing
       const jsonText = rawText.replace(/^```[a-z]*\n?/i, '').replace(/```$/i, '').trim();
       const extracted = JSON.parse(jsonText);
@@ -314,7 +315,7 @@ Rules:
         zeroRatedSales: typeof extracted.zeroRatedSales === 'number' ? extracted.zeroRatedSales : 0,
         confidence,
         lineItems,
-        reviewReason: `Reprocessed via Groq Vision AI. Confidence: ${confidence}%. ${extracted.notes || ''}`,
+        reviewReason: `Reprocessed via Gemini Vision AI. Confidence: ${confidence}%. ${extracted.notes || ''}`,
         status: 'Auto OK',
       };
 
@@ -322,7 +323,7 @@ Rules:
       setFormData({ ...formData, ...updated });
       addNotification(userId, {
         title: 'Reprocess Complete',
-        message: `"${formData.name}" re-extracted by Groq Vision. Confidence: ${confidence}%.`,
+        message: `"${formData.name}" re-extracted by Gemini Vision. Confidence: ${confidence}%.`,
         type: confidence >= 85 ? 'success' : 'warning',
       });
     } catch (err: unknown) {

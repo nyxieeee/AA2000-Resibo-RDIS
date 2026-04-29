@@ -5,8 +5,8 @@ import { Loader2, FileText, AlertCircle, Sparkles, Camera, X, ZoomIn, FlipHorizo
 import { buildDocumentRecord } from './scanUtils';
 import type { ExtractedData } from './scanUtils';
 
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GEMINI_VISION_MODEL = 'gemini-1.5-flash';
 
 async function preprocessImage(imageSource: File | Blob): Promise<{ base64: string; mediaType: string }> {
   return new Promise((resolve, reject) => {
@@ -71,30 +71,35 @@ async function preprocessImage(imageSource: File | Blob): Promise<{ base64: stri
   });
 }
 
-async function callGroqVision(apiKey: string, base64: string, mediaType: string): Promise<ExtractedData> {
+async function callGeminiVision(apiKey: string, base64: string, mediaType: string): Promise<ExtractedData> {
   const prompt = `You are a precise OCR and data extraction AI. Analyze this Philippine receipt or invoice image and extract the following fields. Respond ONLY with a valid JSON object — no markdown, no explanation.\n\nRequired JSON structure:\n{\n  "vendor": "business name at the top of the document",\n  "registeredAddress": "full registered address of the vendor as printed on the document, or empty string if not found",\n  "taxId": "TIN in format 000-000-000-000, or empty string if not found",\n  "documentNumber": "OR/invoice number, or empty string",\n  "documentType": "Receipt | Invoice | Bill",\n  "date": "YYYY-MM-DD format, or empty string",\n  "category": "Expense category (Food, Transportation, Office Supplies, Utilities, etc.)",\n  "paymentMethod": "Cash | Credit Card | GCash | Maya | Bank Transfer | or empty string",\n  "taxType": "VAT | Zero-Rated | Exempt | Amusement Tax",\n  "totalAmount": 0,\n  "vatableSales": 0,\n  "vat": 0,\n  "zeroRatedSales": 0,\n  "lineItems": [\n    { "description": "item name", "qty": 1, "price": 0.00, "net": 0.00 }\n  ],\n  "confidence": 85,\n  "notes": "any relevant notes about document quality or ambiguous fields"\n}\n\nRules:\n- totalAmount, vatableSales, vat, zeroRatedSales must be plain numbers (no currency symbols)\n- If taxType is VAT: vatableSales = totalAmount / 1.12, vat = totalAmount - vatableSales, zeroRatedSales = 0\n- If taxType is Zero-Rated or Exempt: vatableSales = 0, vat = 0, zeroRatedSales = totalAmount\n- confidence: 95+ very clear, 80-94 readable, 60-79 uncertain fields, below 60 poor quality\n- lineItems: extract actual items if visible; otherwise use a single item with the total\n- documentType defaults to Receipt if unclear`;
 
-  const response = await fetch(GROQ_API_URL, {
+  const response = await fetch(`${GEMINI_API_URL}/${GEMINI_VISION_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: GROQ_VISION_MODEL,
-      messages: [{ role: 'user', content: [
-        { type: 'image_url', image_url: { url: `data:${mediaType};base64,${base64}` } },
-        { type: 'text', text: prompt },
-      ]}],
-      max_tokens: 1024,
-      temperature: 0.1,
+      contents: [{
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType: mediaType, data: base64 } },
+        ]
+      }],
+      generationConfig: {
+        maxOutputTokens: 1024,
+        temperature: 0.1,
+      },
     }),
   });
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({})) as { error?: { message?: string } };
-    throw new Error(err?.error?.message || `Groq API error: ${response.status}`);
+    throw new Error(err?.error?.message || `Gemini API error: ${response.status}`);
   }
 
-  const data = await response.json() as { choices?: { message?: { content?: string } }[] };
-  const rawText: string = data.choices?.[0]?.message?.content || '{}';
+  const data = await response.json() as {
+    candidates?: { content?: { parts?: { text?: string }[] } }[];
+  };
+  const rawText = data.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('') || '{}';
   const clean = rawText.replace(/```json\n?|\n?```/g, '').trim();
   try { return JSON.parse(clean) as ExtractedData; }
   catch { throw new Error('Model returned invalid JSON. Please try again.'); }
@@ -271,7 +276,7 @@ export function ScanHub() {
   const addDocument = useDocumentStore(state => state.addDocument);
   const navigate = useNavigate();
 
-  const apiKey = import.meta.env.VITE_GROQ_API_KEY as string | undefined;
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
 
   const handleProcessFile = async (file: File) => {
     const supportedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
@@ -280,7 +285,7 @@ export function ScanHub() {
       return;
     }
     if (!apiKey) {
-      setError('No Groq API key found. Add VITE_GROQ_API_KEY=your_key to your .env file and restart.');
+      setError('No Gemini API key found. Add VITE_GEMINI_API_KEY=your_key to your .env file and restart.');
       return;
     }
     setIsProcessing(true);
@@ -288,8 +293,8 @@ export function ScanHub() {
     try {
       setProcessingStep('Preprocessing image (Grayscale & Contrast)...');
       const { base64, mediaType } = await preprocessImage(file);
-      setProcessingStep('Analyzing with Llama 4 Scout Vision...');
-      const extracted = await callGroqVision(apiKey, base64, mediaType);
+      setProcessingStep('Analyzing with Gemini Vision...');
+      const extracted = await callGeminiVision(apiKey, base64, mediaType);
       setProcessingStep('Building document record...');
       const doc = buildDocumentRecord(file, extracted, base64, mediaType);
       await addDocument(doc);
@@ -297,7 +302,7 @@ export function ScanHub() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to process document. Please try again.';
       setError(msg.includes('fetch') || msg.includes('NetworkError')
-        ? 'Cannot reach Groq API. Please check your internet connection.'
+        ? 'Cannot reach Gemini API. Please check your internet connection.'
         : msg);
     } finally {
       setIsProcessing(false);
@@ -308,7 +313,7 @@ export function ScanHub() {
   const handleCameraCapture = async (blob: Blob) => {
     setShowCamera(false);
     if (!apiKey) {
-      setError('No Groq API key found. Add VITE_GROQ_API_KEY=your_key to your .env file and restart.');
+      setError('No Gemini API key found. Add VITE_GEMINI_API_KEY=your_key to your .env file and restart.');
       return;
     }
     setIsProcessing(true);
@@ -316,8 +321,8 @@ export function ScanHub() {
     try {
       setProcessingStep('Preprocessing captured image...');
       const { base64, mediaType } = await preprocessImage(blob);
-      setProcessingStep('Analyzing with Llama 4 Scout Vision...');
-      const extracted = await callGroqVision(apiKey, base64, mediaType);
+      setProcessingStep('Analyzing with Gemini Vision...');
+      const extracted = await callGeminiVision(apiKey, base64, mediaType);
       setProcessingStep('Building document record...');
       const doc = buildDocumentRecord(null, extracted, base64, mediaType, `scan-${Date.now().toString().slice(-5)}.jpg`);
       await addDocument(doc);
@@ -325,7 +330,7 @@ export function ScanHub() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to process captured image. Please try again.';
       setError(msg.includes('fetch') || msg.includes('NetworkError')
-        ? 'Cannot reach Groq API. Please check your internet connection.'
+        ? 'Cannot reach Gemini API. Please check your internet connection.'
         : msg);
     } finally {
       setIsProcessing(false);
@@ -362,8 +367,8 @@ export function ScanHub() {
           <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-4 text-sm">
             <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" />
             <div>
-              <p className="font-semibold">Groq API Key Required</p>
-              <p className="mt-0.5">Add <code className="bg-amber-100 px-1 rounded">VITE_GROQ_API_KEY=your_key</code> to your <code className="bg-amber-100 px-1 rounded">.env</code> file and restart. Get a free key at <strong>console.groq.com</strong>.</p>
+              <p className="font-semibold">Gemini API Key Required</p>
+              <p className="mt-0.5">Add <code className="bg-amber-100 px-1 rounded">VITE_GEMINI_API_KEY=your_key</code> to your <code className="bg-amber-100 px-1 rounded">.env</code> file and restart. Get your key at <strong>Google AI Studio</strong>.</p>
             </div>
           </div>
         )}
@@ -415,7 +420,7 @@ export function ScanHub() {
         {isProcessing && (
           <div className="flex flex-col items-center gap-3 py-10 rounded-2xl" style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}>
             <Loader2 className="h-10 w-10 text-blue-600 animate-spin" />
-            <h3 className="text-base font-semibold text-[--text-primary]">Analyzing with Llama 4 Scout...</h3>
+            <h3 className="text-base font-semibold text-[--text-primary]">Analyzing with Gemini...</h3>
             <p className="text-[--text-secondary] text-sm">{processingStep}</p>
           </div>
         )}
@@ -435,10 +440,10 @@ export function ScanHub() {
         <div className="rounded-xl p-4 text-sm" style={{ backgroundColor: 'var(--bg-raised)', border: '1px solid var(--border-default)' }}>
           <div className="flex items-center gap-2 mb-1">
             <Sparkles className="h-4 w-4 text-blue-500" />
-            <p className="font-semibold text-[--text-primary]">Powered by Llama 4 Scout via Groq (Free)</p>
+            <p className="font-semibold text-[--text-primary]">Powered by Gemini Vision</p>
           </div>
           <p className="text-[--text-muted] text-xs md:text-sm">
-            Extracts vendor, TIN, OR number, date, amounts, VAT breakdown, and line items. Free tier: 1,000 scans/day. Get your key at <strong>console.groq.com</strong>.
+            Extracts vendor, TIN, OR number, date, amounts, VAT breakdown, and line items. Get your key from <strong>Google AI Studio</strong>.
           </p>
         </div>
       </div>
