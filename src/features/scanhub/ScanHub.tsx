@@ -163,6 +163,10 @@ Rules:
 - If taxType is Zero-Rated or Exempt: vatableSales = 0, vat = 0, zeroRatedSales = totalAmount
 - confidence: 95+ very clear, 80-94 readable, 60-79 uncertain fields, below 60 poor quality
 - lineItems: extract actual items if visible; otherwise use a single item with the total
+- lineItems description quality:
+  - preserve product wording with readable spaces between brand, product, variant, and size
+  - keep SKU/item codes separate from product description text
+  - keep quantity/size tokens explicit (e.g., "160 g", "1.5 L", "2 pcs")
 - documentType defaults to Receipt if unclear
 - handwriting-aware parsing:
   - for handwritten digits/letters, resolve likely OCR confusions (0/O, 1/I/l, 5/S, 8/B) only when context strongly supports it

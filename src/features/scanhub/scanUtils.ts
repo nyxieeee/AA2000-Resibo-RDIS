@@ -7,6 +7,37 @@ interface ExtractedLineItem {
   net?: number;
 }
 
+export function normalizeLineItemDescription(input?: string): string {
+  const raw = (input || '').trim();
+  if (!raw) return 'Item';
+  const preserveCase = (replacement: string) => (match: string) =>
+    match === match.toUpperCase()
+      ? replacement.toUpperCase()
+      : match[0] === match[0].toUpperCase()
+        ? replacement[0].toUpperCase() + replacement.slice(1)
+        : replacement;
+  return raw
+    // Ensure SKU code is separated from product text.
+    .replace(/^(\d{5,7})([A-Za-z])/, '$1 $2')
+    // Split letters/numbers boundaries: TrixPods160g -> Trix Pods 160 g
+    .replace(/([A-Za-z])(\d)/g, '$1 $2')
+    .replace(/(\d)([A-Za-z])/g, '$1 $2')
+    // Split uppercase acronym runs when next token starts as a word.
+    .replace(/([A-Z]{2,})([A-Z][a-z])/g, '$1 $2')
+    // Split lower-to-upper boundaries: CacaoPudr -> Cacao Pudr
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    // Normalize common size units
+    .replace(/\b(\d+)\s*(g|kg|mg|ml|l|oz|pcs?|pc|ct)\b/gi, '$1 $2')
+    // Keep decimal quantities together
+    .replace(/(\d)\s+\.\s+(\d)/g, '$1.$2')
+    // Product-specific OCR corrections observed in receipts
+    .replace(/\btrix\b/gi, preserveCase('twix'))
+    .replace(/\bpudr\b/gi, preserveCase('pwdr'))
+    // Normalize whitespace
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 export interface ExtractedData {
   confidence?: number;
   taxType?: string;
@@ -69,7 +100,7 @@ export function buildDocumentRecord(
   const lineItems = rawLineItems
     ? rawLineItems.map((li: ExtractedLineItem, i: number) => ({
         id: String(i + 1),
-        description: li.description || 'Item',
+        description: normalizeLineItemDescription(li.description),
         qty: Number(li.qty) || 1,
         price: Number(li.price) || Number(li.net) || 0,
         net: Number(li.net) || Number(li.price) || 0,

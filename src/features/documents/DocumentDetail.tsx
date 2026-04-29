@@ -8,6 +8,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import type { DocumentRecord, TaxType, DocumentStatus } from '../../types/document';
 import { apiFetch } from '../../lib/api';
+import { normalizeLineItemDescription } from '../scanhub/scanUtils';
 
 function tryParseJsonLenient(text: string): Record<string, unknown> {
   const normalized = text
@@ -325,6 +326,10 @@ Rules:
 - vatableSales = totalAmount / 1.12 (for VAT receipts), vat = totalAmount - vatableSales
 - confidence: 90+ if all major fields found, 75-89 if some missing, below 75 if image is unclear
 - If a field cannot be determined, use an empty string or 0
+- lineItems description quality:
+  - preserve readable spaces between brand/product/variant/size words
+  - keep SKU/item code separate from product description
+  - keep units explicit (g, kg, ml, L, pcs)
 - handwriting-aware parsing:
   - resolve likely OCR confusions (0/O, 1/I/l, 5/S, 8/B) only when context strongly supports it
   - if the same handwritten value appears multiple times, prefer the clearest repeat
@@ -353,7 +358,7 @@ Rules:
       const lineItems = Array.isArray(extracted.lineItems) && extracted.lineItems.length > 0
         ? (extracted.lineItems as { description?: string; qty?: number; price?: number; net?: number }[]).map((li, i: number) => ({
           id: String(i + 1),
-          description: li.description || 'Item',
+          description: normalizeLineItemDescription(li.description),
           qty: Number(li.qty) || 1,
           price: Number(li.price) || Number(li.net) || 0,
           net: Number(li.net) || Number(li.price) || 0,
