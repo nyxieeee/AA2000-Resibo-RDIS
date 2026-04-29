@@ -8,7 +8,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import type { DocumentRecord, TaxType, DocumentStatus } from '../../types/document';
 import { apiFetch } from '../../lib/api';
-import { normalizeLineItemDescription, GROQ_RECEIPT_VISION_SYSTEM_PROMPT } from '../scanhub/scanUtils';
+import {
+  normalizeLineItemDescription,
+  GROQ_RECEIPT_VISION_SYSTEM_PROMPT,
+  reconcileFinancialResolution,
+  type ExtractedData,
+} from '../scanhub/scanUtils';
 
 function tryParseJsonLenient(text: string): Record<string, unknown> {
   const normalized = text
@@ -352,26 +357,15 @@ Rules:
 
       const groqData = await response.json() as { choices?: { message?: { content?: string } }[] };
       const rawText = groqData.choices?.[0]?.message?.content ?? '';
-      const extracted = parseJsonObjectFromModelText(rawText);
-
-      const total =
-        typeof extracted.totalAmount === 'number' && extracted.totalAmount > 0
-          ? extracted.totalAmount
-          : formData.total;
+      const extracted = parseJsonObjectFromModelText(rawText) as ExtractedData;
 
       const allowedTax: TaxType[] = ['VAT', 'Exempt', 'Zero-Rated', 'Amusement Tax'];
       const taxTypeMerged = allowedTax.includes(extracted.taxType as TaxType)
         ? (extracted.taxType as TaxType)
         : formData.taxType || 'VAT';
 
-      const hasFullTaxBreakdown =
-        typeof extracted.vatableSales === 'number' &&
-        typeof extracted.vat === 'number' &&
-        typeof extracted.zeroRatedSales === 'number';
-      const derivedTax = computeTax(total, taxTypeMerged);
-      const vatableSales = hasFullTaxBreakdown ? (extracted.vatableSales as number) : derivedTax.vatableSales;
-      const vat = hasFullTaxBreakdown ? (extracted.vat as number) : derivedTax.vat;
-      const zeroRatedSales = hasFullTaxBreakdown ? (extracted.zeroRatedSales as number) : derivedTax.zeroRatedSales;
+      const resolved = reconcileFinancialResolution(extracted, taxTypeMerged, formData.total);
+      const total = resolved.total;
 
       const confidence = typeof extracted.confidence === 'number' ? Math.min(100, Math.max(0, extracted.confidence)) : formData.confidence;
 
@@ -387,14 +381,18 @@ Rules:
         }))
         : formData.lineItems;
 
-      const lineSum = lineItems.reduce((s, li) => s + (Number(li.net) || 0), 0);
-      let mismatch = '';
-      if (total > 0 && lineSum > 0) {
-        const maxT = Math.max(total, lineSum);
-        if (maxT > 0 && Math.abs(total - lineSum) / maxT > 0.05) {
-          mismatch = ` Line item nets sum to ${lineSum} but total is ${total}; verify line items against the image.`;
+      const lineItemsAligned = (() => {
+        if (lineItems.length !== 1 || total <= 0) return lineItems;
+        const only = lineItems[0];
+        const isGeneric = /\b(assorted|misc|miscellaneous|various|items?)\b/i.test(only.description || '');
+        const net = Number(only.net) || Number(only.price) || 0;
+        if (!isGeneric || net <= 0) return lineItems;
+        const maxT = Math.max(net, total);
+        if (maxT > 0 && Math.abs(net - total) / maxT > 0.05) {
+          return [{ ...only, qty: 1, price: total, net: total, gross: total }];
         }
-      }
+        return lineItems;
+      })();
 
       const updated: Partial<DocumentRecord> = {
         vendor: extracted.vendor || formData.vendor,
@@ -405,12 +403,12 @@ Rules:
         paymentMethod: (extracted.paymentMethod as string) || formData.paymentMethod,
         taxType: taxTypeMerged,
         total,
-        vatableSales: parseFloat(vatableSales.toFixed(2)),
-        vat: parseFloat(vat.toFixed(2)),
-        zeroRatedSales: parseFloat(zeroRatedSales.toFixed(2)),
+        vatableSales: resolved.vatableSales,
+        vat: resolved.vat,
+        zeroRatedSales: resolved.zeroRatedSales,
         confidence,
-        lineItems,
-        reviewReason: `Reprocessed via Groq Vision AI. Confidence: ${confidence}%. ${extracted.notes || ''}${mismatch}`,
+        lineItems: lineItemsAligned,
+        reviewReason: `Reprocessed via Groq Vision AI. Confidence: ${confidence}%. ${extracted.notes || ''}${resolved.mismatchNote ? ` ${resolved.mismatchNote}` : ''}`,
         status: 'Auto OK',
       };
 
@@ -756,16 +754,27 @@ Rules:
                   if (!img) return null;
                   const ir = img.getBoundingClientRect();
                   const vr = viewerRef.current!.getBoundingClientRect();
-                  const imgLeft = ir.left - vr.left;
-                  const imgTop = ir.top - vr.top;
                   const LENS = 200;
                   const MAG = 3.5;
-                  const cx = hoverPos.x - imgLeft;
-                  const cy = hoverPos.y - imgTop;
-                  const bgW = ir.width * MAG;
-                  const bgH = ir.height * MAG;
-                  const bgX = -(cx * MAG - LENS / 2);
-                  const bgY = -(cy * MAG - LENS / 2);
+                  // Map viewer hover → unrotated layout coords (same space as background-image),
+                  // undoing rotate(zoom) around element center (matches typical 0/90/180/270 use).
+                  const rcx = ir.left - vr.left + ir.width / 2;
+                  const rcy = ir.top - vr.top + ir.height / 2;
+                  const w0 = img.offsetWidth;
+                  const h0 = img.offsetHeight;
+                  let dx = hoverPos.x - rcx;
+                  let dy = hoverPos.y - rcy;
+                  const rad = (-rotation * Math.PI) / 180;
+                  let ex = dx * Math.cos(rad) - dy * Math.sin(rad);
+                  let ey = dx * Math.sin(rad) + dy * Math.cos(rad);
+                  ex /= zoom;
+                  ey /= zoom;
+                  const ux = Math.max(0, Math.min(w0, ex + w0 / 2));
+                  const uy = Math.max(0, Math.min(h0, ey + h0 / 2));
+                  const bgW = w0 * MAG;
+                  const bgH = h0 * MAG;
+                  const bgX = -(ux * MAG - LENS / 2);
+                  const bgY = -(uy * MAG - LENS / 2);
                   const viewerW = vr.width;
                   const viewerH = vr.height;
                   const clampedLeft = Math.max(0, Math.min(hoverPos.x - LENS / 2, viewerW - LENS));

@@ -74,6 +74,87 @@ export interface ExtractedData {
   notes?: string;
 }
 
+function computeTaxFromTotal(total: number, taxType: TaxType) {
+  if (taxType === 'VAT') {
+    const vatableSales = parseFloat((total / 1.12).toFixed(2));
+    return { vatableSales, vat: parseFloat((total - vatableSales).toFixed(2)), zeroRatedSales: 0 };
+  }
+  return { vatableSales: 0, vat: 0, zeroRatedSales: total };
+}
+
+interface FinancialResolution {
+  total: number;
+  vatableSales: number;
+  vat: number;
+  zeroRatedSales: number;
+  lineItemTotal: number;
+  mismatchNote?: string;
+}
+
+/**
+ * Global numeric reconciliation for scan/reprocess:
+ * prefer explicit VAT footer breakdown when present, then explicit total, then line sum.
+ */
+export function reconcileFinancialResolution(
+  extracted: ExtractedData,
+  taxType: TaxType,
+  fallbackTotal = 0,
+): FinancialResolution {
+  const aiTotal =
+    typeof extracted.totalAmount === 'number' && Number.isFinite(extracted.totalAmount) && extracted.totalAmount > 0
+      ? extracted.totalAmount
+      : 0;
+  const lineItemTotal = Array.isArray(extracted.lineItems)
+    ? parseFloat(
+        extracted.lineItems
+          .reduce((sum, li) => sum + (Number(li.net) || Number(li.price) || 0), 0)
+          .toFixed(2),
+      )
+    : 0;
+  const hasBreakdown =
+    typeof extracted.vatableSales === 'number' &&
+    typeof extracted.vat === 'number' &&
+    typeof extracted.zeroRatedSales === 'number' &&
+    extracted.vatableSales >= 0 &&
+    extracted.vat >= 0 &&
+    extracted.zeroRatedSales >= 0;
+  const breakdownTotal = hasBreakdown
+    ? parseFloat(((extracted.vatableSales as number) + (extracted.vat as number) + (extracted.zeroRatedSales as number)).toFixed(2))
+    : 0;
+
+  let total = aiTotal > 0 ? aiTotal : lineItemTotal > 0 ? lineItemTotal : fallbackTotal;
+  if (hasBreakdown && breakdownTotal > 0) {
+    const maxT = Math.max(aiTotal, breakdownTotal);
+    const drift = maxT > 0 ? Math.abs(aiTotal - breakdownTotal) / maxT : 0;
+    if (aiTotal <= 0 || drift > 0.03) total = breakdownTotal;
+  }
+
+  const tax = hasBreakdown
+    ? {
+        vatableSales: extracted.vatableSales as number,
+        vat: extracted.vat as number,
+        zeroRatedSales: extracted.zeroRatedSales as number,
+      }
+    : computeTaxFromTotal(total, taxType);
+
+  let mismatchNote: string | undefined;
+  if (total > 0 && lineItemTotal > 0) {
+    const maxT = Math.max(total, lineItemTotal);
+    if (maxT > 0 && Math.abs(total - lineItemTotal) / maxT > 0.05) {
+      mismatchNote = `Line item nets sum to ${lineItemTotal} but resolved total is ${total}; verify line items against the image.`;
+    }
+  }
+
+  return {
+    total,
+    vatableSales: parseFloat(tax.vatableSales.toFixed(2)),
+    vat: parseFloat(tax.vat.toFixed(2)),
+    zeroRatedSales: parseFloat(tax.zeroRatedSales.toFixed(2)),
+    lineItemTotal,
+    mismatchNote,
+  };
+}
+
 function detectTaxType(category?: string, vendor?: string): TaxType {
   const text = `${category ?? ''} ${vendor ?? ''}`.toLowerCase();
   if (/cinema|movie|amusement|entertainment|theatre|theater/.test(text)) return 'Amusement Tax';
@@ -95,39 +176,12 @@ export function buildDocumentRecord(
   const status: DocumentStatus = 'Auto OK';
   const taxType: TaxType =
     (extracted.taxType as TaxType) || detectTaxType(extracted.category, extracted.vendor);
-  const isVatable = taxType === 'VAT';
-
   const rawLineItems =
     Array.isArray(extracted.lineItems) && extracted.lineItems.length > 0
       ? extracted.lineItems
       : null;
-  const aiTotal: number =
-    typeof extracted.totalAmount === 'number' && extracted.totalAmount > 0
-      ? extracted.totalAmount
-      : 0;
-  const lineItemTotal = rawLineItems
-    ? parseFloat(
-        rawLineItems
-          .reduce(
-            (sum: number, li: ExtractedLineItem) =>
-              sum + (Number(li.net) || Number(li.price) || 0),
-            0,
-          )
-          .toFixed(2),
-      )
-    : 0;
-  // Prefer explicit document total from the model (matches printed Total Payable). Never let
-  // hallucinated line-item nets override the receipt total when both are present.
-  const total: number =
-    aiTotal > 0 ? aiTotal : lineItemTotal > 0 ? lineItemTotal : 0;
-
-  let lineTotalMismatch = '';
-  if (aiTotal > 0 && lineItemTotal > 0) {
-    const maxT = Math.max(aiTotal, lineItemTotal);
-    if (maxT > 0 && Math.abs(aiTotal - lineItemTotal) / maxT > 0.05) {
-      lineTotalMismatch = `Line item nets sum to ${lineItemTotal} but document total is ${aiTotal}; verify line items against the image.`;
-    }
-  }
+  const resolved = reconcileFinancialResolution(extracted, taxType);
+  const total = resolved.total;
 
   const lineItems = rawLineItems
     ? rawLineItems.map((li: ExtractedLineItem, i: number) => ({
@@ -138,18 +192,18 @@ export function buildDocumentRecord(
         net: Number(li.net) || Number(li.price) || 0,
       }))
     : [{ id: '1', description: 'Extracted Item', qty: 1, price: total, net: total }];
-
-  const vatableSales = isVatable
-    ? typeof extracted.vatableSales === 'number'
-      ? extracted.vatableSales
-      : parseFloat((total / 1.12).toFixed(2))
-    : 0;
-  const vat = isVatable
-    ? typeof extracted.vat === 'number'
-      ? extracted.vat
-      : parseFloat((total - vatableSales).toFixed(2))
-    : 0;
-  const zeroRatedSales = !isVatable ? total : 0;
+  const lineItemsAligned = (() => {
+    if (lineItems.length !== 1 || total <= 0) return lineItems;
+    const only = lineItems[0];
+    const isGeneric = /\b(assorted|misc|miscellaneous|various|items?)\b/i.test(only.description || '');
+    const net = Number(only.net) || Number(only.price) || 0;
+    if (!isGeneric || net <= 0) return lineItems;
+    const maxT = Math.max(net, total);
+    if (maxT > 0 && Math.abs(net - total) / maxT > 0.05) {
+      return [{ ...only, qty: 1, price: total, net: total }];
+    }
+    return lineItems;
+  })();
 
   return {
     id: Math.random().toString(36).substr(2, 9),
@@ -173,10 +227,10 @@ export function buildDocumentRecord(
     status,
     date:
       extracted.date && /^\d{4}-\d{2}-\d{2}$/.test(extracted.date) ? extracted.date : '',
-    lineItems,
-    vatableSales: parseFloat(vatableSales.toFixed(2)),
-    vat: parseFloat(vat.toFixed(2)),
-    zeroRatedSales: parseFloat(zeroRatedSales.toFixed(2)),
+    lineItems: lineItemsAligned,
+    vatableSales: resolved.vatableSales,
+    vat: resolved.vat,
+    zeroRatedSales: resolved.zeroRatedSales,
     reviewReason: (() => {
       const parts: string[] = [];
       if (confidence < 80) {
@@ -184,7 +238,7 @@ export function buildDocumentRecord(
       } else if (extracted.notes) {
         parts.push(extracted.notes);
       }
-      if (lineTotalMismatch) parts.push(lineTotalMismatch);
+      if (resolved.mismatchNote) parts.push(resolved.mismatchNote);
       return parts.length ? parts.join(' ') : undefined;
     })(),
     imageData: base64,
