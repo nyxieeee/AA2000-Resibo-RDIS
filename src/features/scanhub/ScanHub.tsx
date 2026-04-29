@@ -2,7 +2,11 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDocumentStore } from '../../store/useDocumentStore';
 import { Loader2, FileText, AlertCircle, Sparkles, Camera, X, ZoomIn, FlipHorizontal, RotateCcw } from 'lucide-react';
-import { buildDocumentRecord, GROQ_RECEIPT_VISION_SYSTEM_PROMPT } from './scanUtils';
+import {
+  buildDocumentRecord,
+  GROQ_RECEIPT_VISION_SYSTEM_PROMPT,
+  preprocessImageForVisionOcr,
+} from './scanUtils';
 import type { ExtractedData } from './scanUtils';
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
@@ -67,81 +71,6 @@ function parseJsonObjectFromModelText(rawText: string): ExtractedData {
   throw new Error('Model returned invalid JSON. Please try again.');
 }
 
-async function preprocessImage(imageSource: File | Blob): Promise<{ base64: string; mediaType: string }> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(imageSource);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        reject(new Error('Failed to get canvas context'));
-        return;
-      }
-
-      // Balance OCR detail vs API payload limits (Groq/proxies reject huge bodies; PNG@4096 often 413).
-      const MAX_SIZE = 2048;
-      const MIN_SIZE = 1400;
-      let width = img.width;
-      let height = img.height;
-
-      const longest = Math.max(width, height);
-      let scale = 1;
-      if (longest > MAX_SIZE) scale = MAX_SIZE / longest;
-      else if (longest < MIN_SIZE) scale = MIN_SIZE / longest;
-      if (scale !== 1) {
-        width = Math.max(1, Math.round(width * scale));
-        height = Math.max(1, Math.round(height * scale));
-      }
-
-      canvas.width = width;
-      canvas.height = height;
-      ctx.drawImage(img, 0, 0, width, height);
-      
-      const imageData = ctx.getImageData(0, 0, width, height);
-      const data = imageData.data;
-      
-      // OCR-oriented cleanup: stronger contrast + slight gamma boost.
-      const contrast = 1.28;
-      const gamma = 0.92;
-      const intercept = 128 * (1 - contrast);
-
-      for (let i = 0; i < data.length; i += 4) {
-        // Luminosity-based grayscale
-        let gray = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
-        
-        // Basic contrast enhancement
-        gray = gray * contrast + intercept;
-        gray = Math.pow(Math.max(0, gray) / 255, gamma) * 255;
-        const final = Math.max(0, Math.min(255, gray));
-        
-        data[i] = final;
-        data[i + 1] = final;
-        data[i + 2] = final;
-      }
-      
-      ctx.putImageData(imageData, 0, 0);
-      // JPEG keeps payload small enough for Groq; high quality preserves receipt text.
-      const JPEG_QUALITY = 0.92;
-      let q = JPEG_QUALITY;
-      let dataUrl = canvas.toDataURL('image/jpeg', q);
-      // ~3.5M base64 chars ≈ 2.6MB binary — stay under common proxy limits
-      const MAX_BASE64_CHARS = 3_200_000;
-      let base64 = '';
-      while (q > 0.5) {
-        dataUrl = canvas.toDataURL('image/jpeg', q);
-        base64 = dataUrl.split(',')[1] ?? '';
-        if (base64.length <= MAX_BASE64_CHARS) break;
-        q -= 0.07;
-      }
-      resolve({ base64, mediaType: 'image/jpeg' });
-    };
-    img.onerror = () => reject(new Error('Failed to process image'));
-    img.src = url;
-  });
-}
-
 async function callGroqVision(apiKey: string, base64: string, mediaType: string): Promise<ExtractedData> {
   const prompt = `You are a precise OCR and data extraction AI. Analyze this Philippine receipt or invoice image and extract the following fields.
 Respond ONLY with a valid JSON object — no markdown, no explanation.
@@ -170,9 +99,10 @@ Required JSON structure:
 
 Rules:
 - ANTI-HALLUCINATION (highest priority): Every field must be transcribed from text or numbers you can actually see in THIS image only. Never invent product names, brands, line items, prices, quantities, dates, or TINs. Never replace handwritten text with plausible grocery items from memory (e.g. if you see "Assorted Items", output exactly that — not a random product). If something is not legible, use "" for strings or 0 for numbers and explain in "notes".
+- taxId: vendor VAT REG. TIN from the printed header (store). Do not put the customer's handwritten Sold-To TIN in taxId when a separate vendor TIN is printed.
 - date: only from the document (printed or handwritten). Convert to YYYY-MM-DD when you can read the date. Never use today's date, never guess a year. If the date cannot be read, use "".
 - totalAmount: use the clearest visible total on the document (e.g. Total Payable, Grand Total, Amount Due). If several totals appear, prefer the one explicitly labeled as payable/grand total and note conflicts in "notes". Do not invent a total that does not appear.
-- totalAmount, vatableSales, vat, zeroRatedSales must be plain numbers (no currency symbols). Prefer amounts explicitly printed/written on the document; only apply VAT math if those fields are not shown but taxType is clearly VAT and you have a single reliable total.
+- totalAmount, vatableSales, vat, zeroRatedSales must be plain numbers (no currency symbols). Prefer handwritten or printed VATABLE SALES / VAT / TOTAL PAYABLE lines on sales invoices when present. Only apply total÷1.12 VAT math when those breakdown lines are missing but taxType is clearly VAT-only.
 - If taxType is VAT: vatableSales = totalAmount / 1.12, vat = totalAmount - vatableSales, zeroRatedSales = 0 (only when you are not copying explicit vatable/VAT lines from the image)
 - If taxType is Zero-Rated or Exempt: vatableSales = 0, vat = 0, zeroRatedSales = totalAmount
 - confidence: 95+ very clear, 80-94 readable, 60-79 uncertain fields, below 60 poor quality
@@ -180,7 +110,7 @@ Rules:
 - lineItems: if the slip has no itemized list and only a lump label, a single lineItem with that label is correct; qty often 1; use amounts shown on that row or align net with totalAmount only when no per-line amounts exist.
 - lineItems description spacing: minor spacing fixes only; never change the words.
 - documentType defaults to Receipt if unclear
-- handwriting: fix obvious OCR confusions (0/O, 1/I/l, 5/S, 8/B) only when context strongly supports it; prefer repeated clearer values; if uncertain, "" / 0 and short note in "notes"`;
+- handwriting / cursive: read strokes as printed; do not substitute a clearer word when shapes are ambiguous — use "" or partial text and note uncertainty. Fix obvious digit confusions (0/O, 1/I/l, 5/S, 8/B) only when context strongly supports it; prefer repeated clearer values; if uncertain, "" / 0 and short note in "notes"`;
 
   const response = await fetch(GROQ_API_URL, {
     method: 'POST',
@@ -396,7 +326,7 @@ export function ScanHub() {
     setError(null);
     try {
       setProcessingStep('Preprocessing image (Grayscale & Contrast)...');
-      const { base64, mediaType } = await preprocessImage(file);
+      const { base64, mediaType } = await preprocessImageForVisionOcr(file);
       setProcessingStep('Analyzing with Llama 4 Scout Vision...');
       const extracted = await callGroqVision(apiKey, base64, mediaType);
       setProcessingStep('Building document record...');
@@ -428,7 +358,7 @@ export function ScanHub() {
     setError(null);
     try {
       setProcessingStep('Preprocessing captured image...');
-      const { base64, mediaType } = await preprocessImage(blob);
+      const { base64, mediaType } = await preprocessImageForVisionOcr(blob);
       setProcessingStep('Analyzing with Llama 4 Scout Vision...');
       const extracted = await callGroqVision(apiKey, base64, mediaType);
       setProcessingStep('Building document record...');
@@ -555,7 +485,7 @@ export function ScanHub() {
             <p className="font-semibold text-[--text-primary]">Powered by Llama 4 Scout via Groq (Free)</p>
           </div>
           <p className="text-[--text-muted] text-xs md:text-sm">
-            Extracts vendor, TIN, OR number, date, amounts, VAT breakdown, and line items. Free tier: 1,000 scans/day. Get your key at <strong>console.groq.com</strong>.
+            Extracts vendor, TIN, OR number, date, amounts, VAT breakdown, and line items. Images are enhanced for faint and cursive ink; use bright, even light and sharp focus, then verify handwritten fields. Free tier: 1,000 scans/day. Get your key at <strong>console.groq.com</strong>.
           </p>
         </div>
       </div>

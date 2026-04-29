@@ -14,7 +14,16 @@ Line items (strict):
 - Each lineItems[].description must be literal text visible on the document for that row — same words, not a paraphrase or "better" product name.
 - Never invent retail products (meat cuts, snacks, drinks, sizes) you do not read on the paper. Wrong: outputting a specific burger or brand when the slip says "Assorted Items", "Miscellaneous", "Various", or similar.
 - Sales invoices often have one handwritten or printed line under Particulars / Description / Items. If that is the only line, return exactly one lineItem and copy that line verbatim (including "Assorted Items").
-- If a line is unreadable, use description "" and say so in notes — do not substitute a plausible product.`;
+- If a line is unreadable, use description "" and say so in notes — do not substitute a plausible product.
+
+Philippine BIR-style sales invoice (table + footer):
+- Columns like QUANTITY / PARTICULARS / UNIT PRICE / AMOUNT: when Quantity and Unit Price are empty but Particulars and Amount are handwritten, output one lineItem — description = only what is written under Particulars (verbatim), net = the handwritten Amount for that row (not invented line items).
+- When the footer shows handwritten VATABLE SALES, VAT AMOUNT, and TOTAL PAYABLE (or the same idea with different label wording), copy those numbers into vatableSales, vat, and totalAmount. Do not replace them with total÷1.12 math when those lines are visible.
+- taxId in JSON means the vendor's VAT REG. TIN printed in the header for the store — not the customer's TIN in the Sold To block unless no vendor TIN appears on the form.
+
+Cursive and script handwriting:
+- Read connected letters as shapes on the page; do not "correct" cursive into a different common word unless the strokes clearly match.
+- When cursive is ambiguous, prefer a literal partial transcription plus a note (e.g. "sold-to name unclear") and lower confidence — never invent names, dates, or amounts.`;
 
 export function normalizeLineItemDescription(input?: string): string {
   const raw = (input || '').trim();
@@ -181,4 +190,113 @@ export function buildDocumentRecord(
     imageData: base64,
     imageType: mediaType,
   };
+}
+
+/** Mild Laplacian sharpen on grayscale RGBA (helps thin pen and cursive strokes). */
+function sharpenGray4Connected(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  strength: number,
+): void {
+  const w = width;
+  const h = height;
+  const gray = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    gray[i] = data[i * 4];
+  }
+  const out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) {
+        out[idx] = gray[idx];
+        continue;
+      }
+      const c = gray[idx];
+      const lap = 4 * c - gray[idx - 1] - gray[idx + 1] - gray[idx - w] - gray[idx + w];
+      out[idx] = Math.max(0, Math.min(255, c + strength * lap));
+    }
+  }
+  for (let i = 0; i < w * h; i++) {
+    const v = Math.round(out[i]);
+    const k = i * 4;
+    data[k] = data[k + 1] = data[k + 2] = v;
+  }
+}
+
+/**
+ * Resize, grayscale, contrast/gamma for faint ink, mild sharpen for cursive — balances OCR vs API payload.
+ */
+export async function preprocessImageForVisionOcr(
+  imageSource: File | Blob,
+): Promise<{ base64: string; mediaType: string }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(imageSource);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Failed to get canvas context'));
+        return;
+      }
+
+      const MAX_SIZE = 2048;
+      const MIN_SIZE = 1680;
+      let width = img.width;
+      let height = img.height;
+
+      const longest = Math.max(width, height);
+      let scale = 1;
+      if (longest > MAX_SIZE) scale = MAX_SIZE / longest;
+      else if (longest < MIN_SIZE) scale = MIN_SIZE / longest;
+      if (scale !== 1) {
+        width = Math.max(1, Math.round(width * scale));
+        height = Math.max(1, Math.round(height * scale));
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      ctx.drawImage(img, 0, 0, width, height);
+
+      const imageData = ctx.getImageData(0, 0, width, height);
+      const data = imageData.data;
+
+      // Slightly stronger than before — helps light pen and cursive on white paper.
+      const contrast = 1.34;
+      const gamma = 0.88;
+      const intercept = 128 * (1 - contrast);
+
+      for (let i = 0; i < data.length; i += 4) {
+        let gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+        gray = gray * contrast + intercept;
+        gray = Math.pow(Math.max(0, gray) / 255, gamma) * 255;
+        const final = Math.max(0, Math.min(255, gray));
+        data[i] = final;
+        data[i + 1] = final;
+        data[i + 2] = final;
+      }
+
+      sharpenGray4Connected(data, width, height, 0.22);
+
+      ctx.putImageData(imageData, 0, 0);
+
+      const JPEG_QUALITY = 0.93;
+      let q = JPEG_QUALITY;
+      let dataUrl = canvas.toDataURL('image/jpeg', q);
+      const MAX_BASE64_CHARS = 3_200_000;
+      let base64 = '';
+      while (q > 0.5) {
+        dataUrl = canvas.toDataURL('image/jpeg', q);
+        base64 = dataUrl.split(',')[1] ?? '';
+        if (base64.length <= MAX_BASE64_CHARS) break;
+        q -= 0.07;
+      }
+      resolve({ base64, mediaType: 'image/jpeg' });
+    };
+    img.onerror = () => reject(new Error('Failed to process image'));
+    img.src = url;
+  });
 }

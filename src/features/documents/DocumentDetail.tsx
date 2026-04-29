@@ -327,6 +327,8 @@ export function DocumentDetail() {
 }
 Rules:
 - ANTI-HALLUCINATION (highest priority): Output only what is visible on THIS image. Never invent product names, line items, amounts, dates, or TINs. Never substitute memory of typical products for handwritten text (e.g. "Assorted Items" must stay "Assorted Items"). If unreadable, use "" or 0 and explain in notes.
+- taxId: vendor VAT REG. TIN from the printed header only — not the customer's Sold-To TIN when both exist.
+- BIR sales invoice table: blank Quantity/Unit Price with handwritten Particulars + Amount → one lineItem (description = Particulars text verbatim, net = that Amount). Footer VATABLE SALES / VAT AMOUNT / TOTAL PAYABLE → copy into vatableSales, vat, totalAmount when handwritten there.
 - date: only from the document; YYYY-MM-DD when readable. Never use today's date. If unreadable, use "".
 - totalAmount: use visible Total Payable / Grand Total / Amount Due. Prefer labeled payable total; note conflicts in notes. Do not invent totals.
 - taxType: from the document (VAT / exempt / zero-rated labels). When both VATable and VAT-exempt amounts appear, still choose the closest primary type and put breakdown in the three amount fields.
@@ -335,7 +337,7 @@ Rules:
 - If a field cannot be determined, use an empty string or 0
 - lineItems: literal transcription per visible line; one row per line when rows exist. Invoice with a single Particulars/Description line (e.g. handwritten "Assorted Items") → one lineItem, that exact string — never substitute a specific retail product.
 - lineItems: preserve readable spacing when helpful without changing meaning.
-- handwriting: OCR confusions only with strong context; prefer clearest repeat; otherwise "" / 0 and notes`,
+- handwriting / cursive: trace letter shapes literally; if ambiguous use "" or partial text and notes — do not guess full words. OCR digit confusions only with strong context; prefer clearest repeat; otherwise "" / 0 and notes`,
                 },
               ],
             },
