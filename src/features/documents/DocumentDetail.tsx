@@ -324,7 +324,11 @@ export function DocumentDetail() {
 Rules:
 - vatableSales = totalAmount / 1.12 (for VAT receipts), vat = totalAmount - vatableSales
 - confidence: 90+ if all major fields found, 75-89 if some missing, below 75 if image is unclear
-- If a field cannot be determined, use an empty string or 0`,
+- If a field cannot be determined, use an empty string or 0
+- handwriting-aware parsing:
+  - resolve likely OCR confusions (0/O, 1/I/l, 5/S, 8/B) only when context strongly supports it
+  - if the same handwritten value appears multiple times, prefer the clearest repeat
+  - do not guess unclear handwriting; keep empty string/0 and mention ambiguity in notes`,
                 },
               ],
             },

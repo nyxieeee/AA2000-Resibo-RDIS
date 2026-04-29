@@ -80,21 +80,19 @@ async function preprocessImage(imageSource: File | Blob): Promise<{ base64: stri
         return;
       }
 
-      // Limit size for optimal AI processing while maintaining clarity
-      const MAX_SIZE = 2560;
+      // Keep detail high: downscale huge images, upscale tiny ones.
+      const MAX_SIZE = 4096;
+      const MIN_SIZE = 1600;
       let width = img.width;
       let height = img.height;
 
-      if (width > height) {
-        if (width > MAX_SIZE) {
-          height *= MAX_SIZE / width;
-          width = MAX_SIZE;
-        }
-      } else {
-        if (height > MAX_SIZE) {
-          width *= MAX_SIZE / height;
-          height = MAX_SIZE;
-        }
+      const longest = Math.max(width, height);
+      let scale = 1;
+      if (longest > MAX_SIZE) scale = MAX_SIZE / longest;
+      else if (longest < MIN_SIZE) scale = MIN_SIZE / longest;
+      if (scale !== 1) {
+        width = Math.max(1, Math.round(width * scale));
+        height = Math.max(1, Math.round(height * scale));
       }
 
       canvas.width = width;
@@ -104,8 +102,9 @@ async function preprocessImage(imageSource: File | Blob): Promise<{ base64: stri
       const imageData = ctx.getImageData(0, 0, width, height);
       const data = imageData.data;
       
-      // Contrast boost factor (1.2 = 20% increase)
-      const contrast = 1.2;
+      // OCR-oriented cleanup: stronger contrast + slight gamma boost.
+      const contrast = 1.28;
+      const gamma = 0.92;
       const intercept = 128 * (1 - contrast);
 
       for (let i = 0; i < data.length; i += 4) {
@@ -114,6 +113,7 @@ async function preprocessImage(imageSource: File | Blob): Promise<{ base64: stri
         
         // Basic contrast enhancement
         gray = gray * contrast + intercept;
+        gray = Math.pow(Math.max(0, gray) / 255, gamma) * 255;
         const final = Math.max(0, Math.min(255, gray));
         
         data[i] = final;
@@ -122,8 +122,9 @@ async function preprocessImage(imageSource: File | Blob): Promise<{ base64: stri
       }
       
       ctx.putImageData(imageData, 0, 0);
-      const base64 = canvas.toDataURL('image/jpeg', 0.92).split(',')[1];
-      resolve({ base64, mediaType: 'image/jpeg' });
+      // Use PNG to avoid JPEG artifacts on tiny receipt text.
+      const base64 = canvas.toDataURL('image/png').split(',')[1];
+      resolve({ base64, mediaType: 'image/png' });
     };
     img.onerror = () => reject(new Error('Failed to process image'));
     img.src = url;
@@ -131,7 +132,43 @@ async function preprocessImage(imageSource: File | Blob): Promise<{ base64: stri
 }
 
 async function callGroqVision(apiKey: string, base64: string, mediaType: string): Promise<ExtractedData> {
-  const prompt = `You are a precise OCR and data extraction AI. Analyze this Philippine receipt or invoice image and extract the following fields. Respond ONLY with a valid JSON object — no markdown, no explanation.\n\nRequired JSON structure:\n{\n  "vendor": "business name at the top of the document",\n  "registeredAddress": "full registered address of the vendor as printed on the document, or empty string if not found",\n  "taxId": "TIN in format 000-000-000-000, or empty string if not found",\n  "documentNumber": "OR/invoice number, or empty string",\n  "documentType": "Receipt | Invoice | Bill",\n  "date": "YYYY-MM-DD format, or empty string",\n  "category": "Expense category (Food, Transportation, Office Supplies, Utilities, etc.)",\n  "paymentMethod": "Cash | Credit Card | GCash | Maya | Bank Transfer | or empty string",\n  "taxType": "VAT | Zero-Rated | Exempt | Amusement Tax",\n  "totalAmount": 0,\n  "vatableSales": 0,\n  "vat": 0,\n  "zeroRatedSales": 0,\n  "lineItems": [\n    { "description": "item name", "qty": 1, "price": 0.00, "net": 0.00 }\n  ],\n  "confidence": 85,\n  "notes": "any relevant notes about document quality or ambiguous fields"\n}\n\nRules:\n- totalAmount, vatableSales, vat, zeroRatedSales must be plain numbers (no currency symbols)\n- If taxType is VAT: vatableSales = totalAmount / 1.12, vat = totalAmount - vatableSales, zeroRatedSales = 0\n- If taxType is Zero-Rated or Exempt: vatableSales = 0, vat = 0, zeroRatedSales = totalAmount\n- confidence: 95+ very clear, 80-94 readable, 60-79 uncertain fields, below 60 poor quality\n- lineItems: extract actual items if visible; otherwise use a single item with the total\n- documentType defaults to Receipt if unclear`;
+  const prompt = `You are a precise OCR and data extraction AI. Analyze this Philippine receipt or invoice image and extract the following fields.
+Respond ONLY with a valid JSON object — no markdown, no explanation.
+
+Required JSON structure:
+{
+  "vendor": "business name at the top of the document",
+  "registeredAddress": "full registered address of the vendor as printed on the document, or empty string if not found",
+  "taxId": "TIN in format 000-000-000-000, or empty string if not found",
+  "documentNumber": "OR/invoice number, or empty string",
+  "documentType": "Receipt | Invoice | Bill",
+  "date": "YYYY-MM-DD format, or empty string",
+  "category": "Expense category (Food, Transportation, Office Supplies, Utilities, etc.)",
+  "paymentMethod": "Cash | Credit Card | GCash | Maya | Bank Transfer | or empty string",
+  "taxType": "VAT | Zero-Rated | Exempt | Amusement Tax",
+  "totalAmount": 0,
+  "vatableSales": 0,
+  "vat": 0,
+  "zeroRatedSales": 0,
+  "lineItems": [
+    { "description": "item name", "qty": 1, "price": 0.00, "net": 0.00 }
+  ],
+  "confidence": 85,
+  "notes": "any relevant notes about document quality or ambiguous fields"
+}
+
+Rules:
+- totalAmount, vatableSales, vat, zeroRatedSales must be plain numbers (no currency symbols)
+- If taxType is VAT: vatableSales = totalAmount / 1.12, vat = totalAmount - vatableSales, zeroRatedSales = 0
+- If taxType is Zero-Rated or Exempt: vatableSales = 0, vat = 0, zeroRatedSales = totalAmount
+- confidence: 95+ very clear, 80-94 readable, 60-79 uncertain fields, below 60 poor quality
+- lineItems: extract actual items if visible; otherwise use a single item with the total
+- documentType defaults to Receipt if unclear
+- handwriting-aware parsing:
+  - for handwritten digits/letters, resolve likely OCR confusions (0/O, 1/I/l, 5/S, 8/B) only when context strongly supports it
+  - prefer the most legible repeated value when totals or dates appear multiple times
+  - do NOT invent unclear handwritten text; return empty string/0 for low-confidence fields
+  - when uncertain on handwriting, include short ambiguity notes (e.g. "TIN middle group could be 3 or 8")`;
 
   const response = await fetch(GROQ_API_URL, {
     method: 'POST',
@@ -142,8 +179,8 @@ async function callGroqVision(apiKey: string, base64: string, mediaType: string)
         { type: 'image_url', image_url: { url: `data:${mediaType};base64,${base64}` } },
         { type: 'text', text: prompt },
       ]}],
-      max_tokens: 1024,
-      temperature: 0.1,
+      max_tokens: 1400,
+      temperature: 0,
     }),
   });
 
