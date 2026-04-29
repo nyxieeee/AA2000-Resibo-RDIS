@@ -6,13 +6,21 @@ import { buildDocumentRecord } from './scanUtils';
 import type { ExtractedData } from './scanUtils';
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
-const GEMINI_VISION_MODEL = 'gemini-2.5-flash';
+const GEMINI_VISION_MODELS = ['gemini-2.5-flash'] as const;
+
+function tryParseJsonLenient(text: string): ExtractedData {
+  const normalized = text
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/,\s*([}\]])/g, '$1');
+  return JSON.parse(normalized) as ExtractedData;
+}
 
 function parseJsonObjectFromModelText(rawText: string): ExtractedData {
   const text = rawText.replace(/```json\s*|```/gi, '').trim();
 
   try {
-    return JSON.parse(text) as ExtractedData;
+    return tryParseJsonLenient(text);
   } catch {
     // Fallback for cases where Gemini adds extra prose around JSON.
   }
@@ -48,7 +56,7 @@ function parseJsonObjectFromModelText(rawText: string): ExtractedData {
       if (depth === 0) {
         const candidate = text.slice(start, i + 1);
         try {
-          return JSON.parse(candidate) as ExtractedData;
+          return tryParseJsonLenient(candidate);
         } catch {
           break;
         }
@@ -125,39 +133,98 @@ async function preprocessImage(imageSource: File | Blob): Promise<{ base64: stri
 async function callGeminiVision(apiKey: string, base64: string, mediaType: string): Promise<ExtractedData> {
   const prompt = `You are a precise OCR and data extraction AI. Analyze this Philippine receipt or invoice image and extract the following fields. Respond ONLY with a valid JSON object — no markdown, no explanation.\n\nRequired JSON structure:\n{\n  "vendor": "business name at the top of the document",\n  "registeredAddress": "full registered address of the vendor as printed on the document, or empty string if not found",\n  "taxId": "TIN in format 000-000-000-000, or empty string if not found",\n  "documentNumber": "OR/invoice number, or empty string",\n  "documentType": "Receipt | Invoice | Bill",\n  "date": "YYYY-MM-DD format, or empty string",\n  "category": "Expense category (Food, Transportation, Office Supplies, Utilities, etc.)",\n  "paymentMethod": "Cash | Credit Card | GCash | Maya | Bank Transfer | or empty string",\n  "taxType": "VAT | Zero-Rated | Exempt | Amusement Tax",\n  "totalAmount": 0,\n  "vatableSales": 0,\n  "vat": 0,\n  "zeroRatedSales": 0,\n  "lineItems": [\n    { "description": "item name", "qty": 1, "price": 0.00, "net": 0.00 }\n  ],\n  "confidence": 85,\n  "notes": "any relevant notes about document quality or ambiguous fields"\n}\n\nRules:\n- totalAmount, vatableSales, vat, zeroRatedSales must be plain numbers (no currency symbols)\n- If taxType is VAT: vatableSales = totalAmount / 1.12, vat = totalAmount - vatableSales, zeroRatedSales = 0\n- If taxType is Zero-Rated or Exempt: vatableSales = 0, vat = 0, zeroRatedSales = totalAmount\n- confidence: 95+ very clear, 80-94 readable, 60-79 uncertain fields, below 60 poor quality\n- lineItems: extract actual items if visible; otherwise use a single item with the total\n- documentType defaults to Receipt if unclear`;
 
-  const response = await fetch(`${GEMINI_API_URL}/${GEMINI_VISION_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{
-        parts: [
-          { text: prompt },
-          { inlineData: { mimeType: mediaType, data: base64 } },
-        ]
-      }],
-      generationConfig: {
-        maxOutputTokens: 1024,
-        temperature: 0.1,
-        responseMimeType: 'application/json',
-      },
-    }),
-  });
+  let lastError: Error | null = null;
+  for (const model of GEMINI_VISION_MODELS) {
+    try {
+      const response = await fetch(`${GEMINI_API_URL}/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: prompt },
+              { inlineData: { mimeType: mediaType, data: base64 } },
+            ]
+          }],
+          generationConfig: {
+            maxOutputTokens: 1024,
+            temperature: 0,
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: 'OBJECT',
+              properties: {
+                vendor: { type: 'STRING' },
+                registeredAddress: { type: 'STRING' },
+                taxId: { type: 'STRING' },
+                documentNumber: { type: 'STRING' },
+                documentType: { type: 'STRING' },
+                date: { type: 'STRING' },
+                category: { type: 'STRING' },
+                paymentMethod: { type: 'STRING' },
+                taxType: { type: 'STRING' },
+                totalAmount: { type: 'NUMBER' },
+                vatableSales: { type: 'NUMBER' },
+                vat: { type: 'NUMBER' },
+                zeroRatedSales: { type: 'NUMBER' },
+                confidence: { type: 'NUMBER' },
+                notes: { type: 'STRING' },
+                lineItems: {
+                  type: 'ARRAY',
+                  items: {
+                    type: 'OBJECT',
+                    properties: {
+                      description: { type: 'STRING' },
+                      qty: { type: 'NUMBER' },
+                      price: { type: 'NUMBER' },
+                      net: { type: 'NUMBER' },
+                    },
+                    required: ['description', 'qty', 'price', 'net'],
+                  },
+                },
+              },
+              required: [
+                'vendor',
+                'registeredAddress',
+                'taxId',
+                'documentNumber',
+                'documentType',
+                'date',
+                'category',
+                'paymentMethod',
+                'taxType',
+                'totalAmount',
+                'vatableSales',
+                'vat',
+                'zeroRatedSales',
+                'lineItems',
+                'confidence',
+                'notes',
+              ],
+            },
+          },
+        }),
+      });
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({})) as { error?: { message?: string } };
-    throw new Error(err?.error?.message || `Gemini API error: ${response.status}`);
-  }
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({})) as { error?: { message?: string } };
+        throw new Error(err?.error?.message || `Gemini API error: ${response.status}`);
+      }
 
-  const data = await response.json() as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-    promptFeedback?: { blockReason?: string };
-  };
-  const rawText = data.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('')?.trim() || '';
-  if (!rawText) {
-    const blockReason = data.promptFeedback?.blockReason;
-    throw new Error(blockReason ? `Gemini blocked the request: ${blockReason}` : 'Gemini returned an empty response. Please try again.');
+      const data = await response.json() as {
+        candidates?: { content?: { parts?: { text?: string }[] } }[];
+        promptFeedback?: { blockReason?: string };
+      };
+      const rawText = data.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('')?.trim() || '';
+      if (!rawText) {
+        const blockReason = data.promptFeedback?.blockReason;
+        throw new Error(blockReason ? `Gemini blocked the request: ${blockReason}` : 'Gemini returned an empty response. Please try again.');
+      }
+      return parseJsonObjectFromModelText(rawText);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error('Gemini request failed');
+    }
   }
-  return parseJsonObjectFromModelText(rawText);
+  throw lastError || new Error('Gemini request failed');
 }
 
 // ── Camera Modal ──────────────────────────────────────────────────────────────

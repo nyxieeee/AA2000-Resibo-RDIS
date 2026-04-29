@@ -9,11 +9,21 @@ import { createPortal } from 'react-dom';
 import type { DocumentRecord, TaxType, DocumentStatus } from '../../types/document';
 import { apiFetch } from '../../lib/api';
 
+const GEMINI_VISION_MODELS = ['gemini-2.5-flash'] as const;
+
+function tryParseJsonLenient(text: string): Record<string, unknown> {
+  const normalized = text
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/,\s*([}\]])/g, '$1');
+  return JSON.parse(normalized) as Record<string, unknown>;
+}
+
 function parseJsonObjectFromModelText(rawText: string): Record<string, unknown> {
   const text = rawText.replace(/```json\s*|```/gi, '').trim();
 
   try {
-    return JSON.parse(text) as Record<string, unknown>;
+    return tryParseJsonLenient(text);
   } catch {
     // Fallback for cases where Gemini adds extra prose around JSON.
   }
@@ -49,7 +59,7 @@ function parseJsonObjectFromModelText(rawText: string): Record<string, unknown> 
       if (depth === 0) {
         const candidate = text.slice(start, i + 1);
         try {
-          return JSON.parse(candidate) as Record<string, unknown>;
+          return tryParseJsonLenient(candidate);
         } catch {
           break;
         }
@@ -277,16 +287,20 @@ export function DocumentDetail() {
     setIsReprocessing(true);
     setReprocessError(null);
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(geminiKey)}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              {
-                text: `You are a Philippine BIR receipt parser. Extract all fields from this receipt or invoice image and return ONLY a valid JSON object — no prose, no markdown fences. Use this exact shape:
+      let extracted: Record<string, unknown> | null = null;
+      let lastError: Error | null = null;
+      for (const model of GEMINI_VISION_MODELS) {
+        try {
+          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(geminiKey)}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  {
+                    text: `You are a Philippine BIR receipt parser. Extract all fields from this receipt or invoice image and return ONLY a valid JSON object — no prose, no markdown fences. Use this exact shape:
 {
   "vendor": "string",
   "registeredAddress": "full registered address of the vendor as printed on the document, or empty string",
@@ -307,38 +321,91 @@ Rules:
 - vatableSales = totalAmount / 1.12 (for VAT receipts), vat = totalAmount - vatableSales
 - confidence: 90+ if all major fields found, 75-89 if some missing, below 75 if image is unclear
 - If a field cannot be determined, use an empty string or 0`,
-              },
-              {
-                inlineData: {
-                  mimeType: formData.imageType,
-                  data: formData.imageData,
+                  },
+                  {
+                    inlineData: {
+                      mimeType: formData.imageType,
+                      data: formData.imageData,
+                    },
+                  },
+                ],
+              }],
+              generationConfig: {
+                maxOutputTokens: 1024,
+                temperature: 0,
+                responseMimeType: 'application/json',
+                responseSchema: {
+                  type: 'OBJECT',
+                  properties: {
+                    vendor: { type: 'STRING' },
+                    registeredAddress: { type: 'STRING' },
+                    taxId: { type: 'STRING' },
+                    documentNumber: { type: 'STRING' },
+                    documentType: { type: 'STRING' },
+                    date: { type: 'STRING' },
+                    paymentMethod: { type: 'STRING' },
+                    totalAmount: { type: 'NUMBER' },
+                    vatableSales: { type: 'NUMBER' },
+                    vat: { type: 'NUMBER' },
+                    zeroRatedSales: { type: 'NUMBER' },
+                    confidence: { type: 'NUMBER' },
+                    notes: { type: 'STRING' },
+                    lineItems: {
+                      type: 'ARRAY',
+                      items: {
+                        type: 'OBJECT',
+                        properties: {
+                          description: { type: 'STRING' },
+                          qty: { type: 'NUMBER' },
+                          price: { type: 'NUMBER' },
+                          net: { type: 'NUMBER' },
+                        },
+                        required: ['description', 'qty', 'price', 'net'],
+                      },
+                    },
+                  },
+                  required: [
+                    'vendor',
+                    'registeredAddress',
+                    'taxId',
+                    'documentNumber',
+                    'documentType',
+                    'date',
+                    'paymentMethod',
+                    'totalAmount',
+                    'vatableSales',
+                    'vat',
+                    'zeroRatedSales',
+                    'lineItems',
+                    'confidence',
+                    'notes',
+                  ],
                 },
               },
-            ],
-          }],
-          generationConfig: {
-            maxOutputTokens: 1024,
-            temperature: 0.1,
-            responseMimeType: 'application/json',
-          },
-        }),
-      });
+            }),
+          });
 
-      if (!response.ok) {
-        const errBody = await response.json().catch(() => ({}));
-        throw new Error(errBody?.error?.message || `Gemini API error ${response.status}`);
-      }
+          if (!response.ok) {
+            const errBody = await response.json().catch(() => ({}));
+            throw new Error(errBody?.error?.message || `Gemini API error ${response.status}`);
+          }
 
-      const geminiData = await response.json() as {
-        candidates?: { content?: { parts?: { text?: string }[] } }[];
-        promptFeedback?: { blockReason?: string };
-      };
-      const rawText = geminiData.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('')?.trim() ?? '';
-      if (!rawText) {
-        const blockReason = geminiData.promptFeedback?.blockReason;
-        throw new Error(blockReason ? `Gemini blocked the request: ${blockReason}` : 'Gemini returned an empty response. Please try again.');
+          const geminiData = await response.json() as {
+            candidates?: { content?: { parts?: { text?: string }[] } }[];
+            promptFeedback?: { blockReason?: string };
+          };
+          const rawText = geminiData.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('')?.trim() ?? '';
+          if (!rawText) {
+            const blockReason = geminiData.promptFeedback?.blockReason;
+            throw new Error(blockReason ? `Gemini blocked the request: ${blockReason}` : 'Gemini returned an empty response. Please try again.');
+          }
+          extracted = parseJsonObjectFromModelText(rawText);
+          break;
+        } catch (err) {
+          lastError = err instanceof Error ? err : new Error('Gemini request failed');
+        }
       }
-      const extracted = parseJsonObjectFromModelText(rawText);
+      if (!extracted) throw lastError || new Error('Gemini request failed');
 
       const total = typeof extracted.totalAmount === 'number' ? extracted.totalAmount : formData.total;
       const vatableSales = typeof extracted.vatableSales === 'number' ? extracted.vatableSales : total / 1.12;
