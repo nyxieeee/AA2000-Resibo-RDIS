@@ -138,6 +138,7 @@ async function callGeminiVision(apiKey: string, base64: string, mediaType: strin
       generationConfig: {
         maxOutputTokens: 1024,
         temperature: 0.1,
+        responseMimeType: 'application/json',
       },
     }),
   });
@@ -149,8 +150,13 @@ async function callGeminiVision(apiKey: string, base64: string, mediaType: strin
 
   const data = await response.json() as {
     candidates?: { content?: { parts?: { text?: string }[] } }[];
+    promptFeedback?: { blockReason?: string };
   };
-  const rawText = data.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('') || '{}';
+  const rawText = data.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('')?.trim() || '';
+  if (!rawText) {
+    const blockReason = data.promptFeedback?.blockReason;
+    throw new Error(blockReason ? `Gemini blocked the request: ${blockReason}` : 'Gemini returned an empty response. Please try again.');
+  }
   return parseJsonObjectFromModelText(rawText);
 }
 

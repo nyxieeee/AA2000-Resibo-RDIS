@@ -319,6 +319,7 @@ Rules:
           generationConfig: {
             maxOutputTokens: 1024,
             temperature: 0.1,
+            responseMimeType: 'application/json',
           },
         }),
       });
@@ -330,8 +331,13 @@ Rules:
 
       const geminiData = await response.json() as {
         candidates?: { content?: { parts?: { text?: string }[] } }[];
+        promptFeedback?: { blockReason?: string };
       };
-      const rawText = geminiData.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('') ?? '';
+      const rawText = geminiData.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('')?.trim() ?? '';
+      if (!rawText) {
+        const blockReason = geminiData.promptFeedback?.blockReason;
+        throw new Error(blockReason ? `Gemini blocked the request: ${blockReason}` : 'Gemini returned an empty response. Please try again.');
+      }
       const extracted = parseJsonObjectFromModelText(rawText);
 
       const total = typeof extracted.totalAmount === 'number' ? extracted.totalAmount : formData.total;
