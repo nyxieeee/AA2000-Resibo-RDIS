@@ -299,8 +299,12 @@ async function fetchJson(url: string, token?: string): Promise<SessionVerifyPayl
 
 function verifyBases(): string[] {
   const unique = new Set(BASE_API_CANDIDATES);
-  if (unique.size === 0 && !import.meta.env.DEV) {
-    unique.add('https://desktop-0iik0rk.tail78436b.ts.net');
+  if (unique.size === 0) {
+    if (import.meta.env.DEV) {
+      unique.add('https://desktop-0iik0rk.tail78436b.ts.net');
+    } else {
+      unique.add('/api');
+    }
   }
   return [...unique];
 }
