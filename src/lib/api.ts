@@ -1,4 +1,4 @@
-const DEFAULT_API_BASE_URL = 'https://desktop-0iik0rk.tail20a759.ts.net';
+const DEFAULT_API_BASE_URL = 'https://desktop-0iik0rk.tail78436b.ts.net';
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
 export const API_URL = (import.meta.env.DEV || (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('capacitor'))) ? '/api' : API_BASE_URL;
 

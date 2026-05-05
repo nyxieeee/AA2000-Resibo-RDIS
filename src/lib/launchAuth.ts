@@ -267,8 +267,12 @@ export async function normalizeIncomingAccountId(input: string): Promise<string>
 }
 
 async function fetchJson(url: string): Promise<SessionVerifyPayload | null> {
+  const apiKey = import.meta.env.VITE_API_KEY;
+  const finalUrl = apiKey ? `${url}${url.includes('?') ? '&' : '?'}api_key=${apiKey}` : url;
+  const headers = apiKey ? { 'x-api-key': apiKey } : {};
+
   try {
-    const response = await fetch(url, { method: 'GET', credentials: 'include' });
+    const response = await fetch(finalUrl, { method: 'GET', credentials: 'include', headers });
     if (!response.ok) return null;
     return (await response.json()) as SessionVerifyPayload;
   } catch {
@@ -279,7 +283,7 @@ async function fetchJson(url: string): Promise<SessionVerifyPayload | null> {
 function verifyBases(): string[] {
   const unique = new Set(BASE_API_CANDIDATES);
   if (unique.size === 0 && !import.meta.env.DEV) {
-    unique.add('https://desktop-0iik0rk.tail20a759.ts.net');
+    unique.add('https://desktop-0iik0rk.tail78436b.ts.net');
   }
   return [...unique];
 }
@@ -359,12 +363,16 @@ function asObject(value: unknown): Record<string, unknown> | null {
 }
 
 async function fetchAccountLike(url: string, sessionToken?: string): Promise<SessionVerifyPayload | null> {
+  const apiKey = import.meta.env.VITE_API_KEY;
+  const finalUrl = apiKey ? `${url}${url.includes('?') ? '&' : '?'}api_key=${apiKey}` : url;
+
   try {
     const headers: HeadersInit = {
       Accept: 'application/json',
       ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+      ...(apiKey ? { 'x-api-key': apiKey } : {}),
     };
-    const response = await fetch(url, { method: 'GET', headers, credentials: 'include' });
+    const response = await fetch(finalUrl, { method: 'GET', headers, credentials: 'include' });
     if (!response.ok) return null;
     const json = await response.json();
     const root = asObject(json);
