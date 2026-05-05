@@ -78,22 +78,29 @@ function getPathEncodedValue(key: string): NullableString {
 }
 
 function getFromUrl(keys: string[]): NullableString {
-  const url = new URL(window.location.href);
+  const fullUrl = window.location.href;
+  const url = new URL(fullUrl);
+  
   for (const key of keys) {
+    // 1. Direct query param
     const fromQuery = url.searchParams.get(key);
     if (fromQuery) return fromQuery;
 
-    // Support hash-style params, e.g. #__launch=... or #/path?__launch=...
+    // 2. Hash params (checking both ?query and raw key=value in hash)
     const hash = window.location.hash || '';
-    const rawHashQuery = hash.includes('?')
-      ? hash.slice(hash.indexOf('?') + 1)
-      : hash.startsWith('#') ? hash.slice(1) : hash;
-    if (rawHashQuery) {
-      const hashParams = new URLSearchParams(rawHashQuery);
+    if (hash) {
+      const rawHash = hash.startsWith('#') ? hash.slice(1) : hash;
+      const hashParams = new URLSearchParams(rawHash.includes('?') ? rawHash.split('?')[1] : rawHash);
       const fromHash = hashParams.get(key);
       if (fromHash) return fromHash;
+      
+      // Try regex for cases like #/path/key=value
+      const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const match = hash.match(new RegExp(`(?:^|[?&/#])${escaped}=([^&/]+)`));
+      if (match?.[1]) return match[1];
     }
 
+    // 3. Path encoded value (e.g. /path/key=value)
     const fromPath = getPathEncodedValue(key);
     if (fromPath) return fromPath;
   }

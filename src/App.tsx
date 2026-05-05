@@ -14,6 +14,7 @@ import { Chat } from './features/chat/Chat';
 import { Profile } from './features/profile/Profile';
 import { useEffect } from 'react';
 import { useAuthStore } from './store/useAuthStore';
+import { useLocation } from 'react-router-dom';
 
 function AuthBootstrap() {
   const initAuthFromLaunch = useAuthStore((state) => state.initAuthFromLaunch);
@@ -25,12 +26,17 @@ function AuthBootstrap() {
   return null;
 }
 
+function RootRedirect() {
+  const location = useLocation();
+  return <Navigate to={`/dashboard${location.search}${location.hash}`} replace />;
+}
+
 function App() {
   return (
     <BrowserRouter>
       <AuthBootstrap />
       <Routes>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/" element={<RootRedirect />} />
         
         <Route element={<AuthLayout />}>
           <Route path="session-required" element={<SessionRequired />} />

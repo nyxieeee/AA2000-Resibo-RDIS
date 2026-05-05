@@ -30,7 +30,7 @@ export function MainLayout() {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/session-required" replace />;
+    return <Navigate to={`/session-required${location.search}${location.hash}`} replace />;
   }
 
   return (
