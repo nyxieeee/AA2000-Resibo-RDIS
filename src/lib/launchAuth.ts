@@ -285,14 +285,15 @@ export async function normalizeIncomingAccountId(input: string): Promise<string>
 async function fetchJson(url: string, token?: string): Promise<SessionVerifyPayload | null> {
   const apiKey = import.meta.env.VITE_API_KEY;
   const finalUrl = apiKey ? `${url}${url.includes('?') ? '&' : '?'}api_key=${apiKey}` : url;
-  const headers: HeadersInit = {
-    Accept: 'application/json',
-    ...(apiKey ? { 'x-api-key': apiKey } : {}),
-    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-  };
-
+  
   try {
-    const response = await fetch(finalUrl, { method: 'GET', credentials: 'include', headers });
+    const response = await fetch(finalUrl, { 
+      method: 'GET', 
+      credentials: 'include',
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
     if (!response.ok) return null;
     const json = await response.json();
     const root = asObject(json);
