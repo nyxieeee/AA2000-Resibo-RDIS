@@ -6,51 +6,15 @@ import {
 import { cn } from '../../lib/utils';
 import { useAuthStore } from '../../store/useAuthStore';
 
-const execRoles = ['CEO', 'President', 'General Manager'];
-const allRoles = [...execRoles, 'Accountant', 'Marketing', 'Viewer'];
-
-const normalizeRole = (role?: string) => (role || '').trim().toLowerCase();
-const ROLE_ALIASES: Record<string, string> = {
-  admin: 'admin',
-  ceo: 'ceo',
-  president: 'president',
-  'general manager': 'general manager',
-  gm: 'general manager',
-  accountant: 'accountant',
-  'finance officer': 'accountant',
-  'junior accountant': 'accountant',
-  marketing: 'marketing',
-  'marketing officer': 'marketing',
-  'marketing staff': 'marketing',
-  viewer: 'viewer',
-  staff: 'viewer',
-  user: 'viewer',
-};
-
-const canonicalRole = (role?: string) => {
-  const normalized = normalizeRole(role);
-  if (!normalized) return 'viewer';
-  if (normalized.includes('admin')) return 'admin';
-  return ROLE_ALIASES[normalized] || 'viewer';
-};
-
-const hasAccess = (allowedRoles: string[], userRole?: string) => {
-  const current = canonicalRole(userRole);
-  if (!current) return false;
-  if (current === 'admin') return true;
-  const allowed = allowedRoles.map((role) => canonicalRole(role));
-  return allowed.includes(current);
-};
-
 const mobileNavItems = [
-  { name: 'Home', path: '/dashboard', icon: LayoutDashboard, roles: allRoles },
-  { name: 'Profile', path: '/profile', icon: UserCircle, roles: allRoles },
-  { name: 'Scan', path: '/scanhub', icon: UploadCloud, roles: allRoles },
-  { name: 'Docs', path: '/documents', icon: Files, roles: allRoles },
-  { name: 'BIR', path: '/filing', icon: FileText, roles: ['Accountant'] as string[] },
-  { name: 'Stats', path: '/analytics', icon: BarChart3, roles: allRoles },
-  { name: 'Chat', path: '/chat', icon: BrainCircuit, roles: allRoles },
-  { name: 'Settings', path: '/settings', icon: Settings, roles: allRoles },
+  { name: 'Home', path: '/dashboard', icon: LayoutDashboard },
+  { name: 'Profile', path: '/profile', icon: UserCircle },
+  { name: 'Scan', path: '/scanhub', icon: UploadCloud },
+  { name: 'Docs', path: '/documents', icon: Files },
+  { name: 'BIR', path: '/filing', icon: FileText },
+  { name: 'Stats', path: '/analytics', icon: BarChart3 },
+  { name: 'Chat', path: '/chat', icon: BrainCircuit },
+  { name: 'Settings', path: '/settings', icon: Settings },
 ];
 
 export function MobileNav() {
@@ -59,7 +23,7 @@ export function MobileNav() {
 
   if (!user) return null;
 
-  const visibleItems = mobileNavItems.filter(item => hasAccess(item.roles, user.role));
+  const visibleItems = mobileNavItems;
 
   const handleSettingsTap = (e: React.MouseEvent) => {
     if (location.pathname.startsWith('/settings')) {
