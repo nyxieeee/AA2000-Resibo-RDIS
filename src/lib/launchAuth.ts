@@ -179,35 +179,44 @@ async function getAesKeyCandidates(): Promise<Uint8Array[]> {
 }
 
 async function decryptAesGcmPortal(token: string): Promise<NullableString> {
-  const bytes = (() => {
-    try {
-      return base64ToBytes(token);
-    } catch {
-      return null;
-    }
-  })();
-  if (!bytes || bytes.length <= 12) return null;
+  const tokenCandidates = Array.from(new Set([
+    String(token ?? '').trim(),
+    (() => { try { return decodeURIComponent(String(token ?? '').trim()); } catch { return ''; } })(),
+    String(token ?? '').trim().replace(/ /g, '+'),
+  ].filter(Boolean)));
 
-  const iv = bytes.slice(0, 12);
-  const cipher = bytes.slice(12);
   const candidates = await getAesKeyCandidates();
 
-  for (const keyBytes of candidates) {
-    try {
-      const key = await crypto.subtle.importKey('raw', asArrayBuffer(keyBytes), 'AES-GCM', false, ['decrypt']);
-      const plain = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: asArrayBuffer(iv) },
-        key,
-        asArrayBuffer(cipher),
-      );
-      return bytesToUtf8(new Uint8Array(plain));
-    } catch {
-      // Try the next key candidate.
+  for (const candidate of tokenCandidates) {
+    const bytes = (() => {
+      try {
+        return base64ToBytes(candidate);
+      } catch {
+        return null;
+      }
+    })();
+    if (!bytes || bytes.length <= 12) continue;
+
+    const iv = bytes.slice(0, 12);
+    const cipher = bytes.slice(12);
+
+    for (const keyBytes of candidates) {
+      try {
+        const key = await crypto.subtle.importKey('raw', asArrayBuffer(keyBytes), 'AES-GCM', false, ['decrypt']);
+        const plain = await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: asArrayBuffer(iv) },
+          key,
+          asArrayBuffer(cipher),
+        );
+        return bytesToUtf8(new Uint8Array(plain));
+      } catch {
+        // Try the next key candidate.
+      }
     }
   }
 
   try {
-    debugLog('decryptAesGcmPortal', 'all key candidates failed');
+    debugLog('decryptAesGcmPortal', 'all candidates failed');
   } catch {
     // noop
   }
