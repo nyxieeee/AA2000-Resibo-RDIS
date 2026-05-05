@@ -40,6 +40,8 @@ export function SessionRequired() {
       </p>
       <div className="mt-2 text-[11px] text-slate-500">
         URL token: <strong>{hasUrlToken ? 'detected' : 'missing'}</strong> | actor: <strong>{hasUrlActor ? 'detected' : 'missing'}</strong> | stored token: <strong>{hasStoredToken ? 'present' : 'missing'}</strong>
+        <br />
+        <span className="opacity-70">Origin: <code>{window.location.origin}</code> | Path: <code>{window.location.pathname}</code></span>
       </div>
       {authError && (
         <p className="mt-2 text-xs text-red-600">{authError}</p>

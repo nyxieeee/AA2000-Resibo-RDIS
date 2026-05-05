@@ -45,8 +45,8 @@ export interface LaunchUserDetails {
   session: Record<string, unknown> | null;
 }
 
-const TOKEN_KEYS = ['__launch', '_launch', 'launchToken', 'sessionToken', 'token', 's_name'];
-const ACCOUNT_ID_KEYS = ['__actor', 'acc_ID', 'accId', 'accountId', 'acc_id'];
+const TOKEN_KEYS = ['__launch', '_launch', 'launchToken', 'sessionToken', 'session_token', 'token', 's_name', 's_ID', 's_id', 'sid', 'auth_token', 'accessToken'];
+const ACCOUNT_ID_KEYS = ['__actor', 'acc_ID', 'accId', 'accountId', 'acc_id', 'user_id', 'userId'];
 
 const AUTH_DEBUG = (import.meta.env.VITE_AUTH_DEBUG || '').toLowerCase() === 'true';
 const AUTH_STRICT_ROUTES = (import.meta.env.VITE_AUTH_STRICT_ROUTES || '').toLowerCase() === 'true';
@@ -266,15 +266,32 @@ export async function normalizeIncomingAccountId(input: string): Promise<string>
   return normalized.trim();
 }
 
-async function fetchJson(url: string): Promise<SessionVerifyPayload | null> {
+async function fetchJson(url: string, token?: string): Promise<SessionVerifyPayload | null> {
   const apiKey = import.meta.env.VITE_API_KEY;
   const finalUrl = apiKey ? `${url}${url.includes('?') ? '&' : '?'}api_key=${apiKey}` : url;
-  const headers = apiKey ? { 'x-api-key': apiKey } : {};
+  const headers: HeadersInit = {
+    Accept: 'application/json',
+    ...(apiKey ? { 'x-api-key': apiKey } : {}),
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+  };
 
   try {
     const response = await fetch(finalUrl, { method: 'GET', credentials: 'include', headers });
     if (!response.ok) return null;
-    return (await response.json()) as SessionVerifyPayload;
+    const json = await response.json();
+    const root = asObject(json);
+    if (!root) return null;
+
+    // If the response is the account object itself (no 'account' wrapper)
+    if (root.acc_ID != null || root.username || root.email || root.role_name) {
+      return {
+        account: root as any,
+        session: (root.session as any) || { s_name: token },
+        ...root,
+      };
+    }
+
+    return root as SessionVerifyPayload;
   } catch {
     return null;
   }
@@ -323,7 +340,7 @@ function formatEndpoint(template: string, token: string): string {
 export async function verifyLaunchToken(token: string): Promise<SessionVerifyPayload | null> {
   const candidates = VERIFY_LAUNCH_URL ? [formatEndpoint(VERIFY_LAUNCH_URL, token)] : launchRouteCandidates(token);
   for (const url of candidates) {
-    const payload = await fetchJson(url);
+    const payload = await fetchJson(url, token);
     debugLog('verifyLaunchToken', url, Boolean(payload));
     if (payload) return payload;
   }
@@ -333,7 +350,7 @@ export async function verifyLaunchToken(token: string): Promise<SessionVerifyPay
 export async function verifySessionToken(token: string): Promise<SessionVerifyPayload | null> {
   const candidates = VERIFY_SESSION_URL ? [formatEndpoint(VERIFY_SESSION_URL, token)] : sessionRouteCandidates(token);
   for (const url of candidates) {
-    const payload = await fetchJson(url);
+    const payload = await fetchJson(url, token);
     debugLog('verifySessionToken', url, Boolean(payload));
     if (payload) return payload;
   }
