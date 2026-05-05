@@ -29,8 +29,9 @@ const ROLE_ALIASES: Record<string, string> = {
 
 const canonicalRole = (role?: string) => {
   const normalized = normalizeRole(role);
-  if (!normalized) return '';
-  return ROLE_ALIASES[normalized] || normalized;
+  if (!normalized) return 'viewer';
+  if (normalized.includes('admin')) return 'admin';
+  return ROLE_ALIASES[normalized] || 'viewer';
 };
 
 const hasAccess = (allowedRoles: string[], userRole?: string) => {
