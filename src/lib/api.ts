@@ -6,9 +6,11 @@ type ApiError = Error & { status?: number };
 
 export async function apiFetch(endpoint: string, options: RequestInit = {}) {
   const token = localStorage.getItem('aa2000-auth-token');
+  const apiKey = import.meta.env.VITE_API_KEY;
 
   const headers: Record<string, string> = {
     ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+    ...(apiKey ? { 'x-api-key': apiKey } : {}),
     ...(options.headers as Record<string, string> || {}),
   };
 
@@ -17,7 +19,11 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}) {
     headers['Content-Type'] = 'application/json';
   }
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
+  const urlWithKey = apiKey 
+    ? `${API_URL}${endpoint}${endpoint.includes('?') ? '&' : '?'}api_key=${apiKey}`
+    : `${API_URL}${endpoint}`;
+
+  const response = await fetch(urlWithKey, {
     ...options,
     headers,
   });
