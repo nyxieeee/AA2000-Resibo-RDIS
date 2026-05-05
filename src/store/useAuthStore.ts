@@ -181,7 +181,7 @@ export const useAuthStore = create<AuthState>()(
 
           // 1) Prefer direct session verification from normalized session token.
           const sessionPayload = await verifySessionToken(storedSessionToken);
-          if (sessionPayload?.account && sessionPayload?.session) {
+          if (sessionPayload?.account && (sessionPayload?.session || sessionPayload?.s_name)) {
             const accountId = resolvePayloadAccountId(sessionPayload, accountHint);
             const hydratedPayload = await enrichPayloadWithAccountDetails(
               sessionPayload,
@@ -200,7 +200,7 @@ export const useAuthStore = create<AuthState>()(
           // 2) Fallback to launch-token verification (encrypted/raw candidate compatibility).
           const launchCandidate = rawLaunchToken || storedSessionToken;
           const launchPayload = await verifyLaunchToken(launchCandidate);
-          if (launchPayload?.account && launchPayload?.session) {
+          if (launchPayload?.account && (launchPayload?.session || launchPayload?.s_name)) {
             if (launchPayload.session?.s_name) {
               await saveSessionToken(String(launchPayload.session.s_name));
             }
@@ -220,18 +220,19 @@ export const useAuthStore = create<AuthState>()(
             return;
           }
 
+          const errorReason = !launchPayload ? 'Verification failed (Invalid Token).' : 'Verification failed (Account Data Missing).';
           set({
             user: null,
             isAuthenticated: false,
-            authError: 'Session required.',
+            authError: errorReason,
             isAuthBootstrapping: false,
           });
-        } catch (error) {
+        } catch (error: any) {
           console.error('Auth bootstrap failed:', error);
           set({
             user: null,
             isAuthenticated: false,
-            authError: 'Unable to verify session.',
+            authError: `Unable to verify session: ${error.message || 'Network Error'}`,
             isAuthBootstrapping: false,
           });
         }
